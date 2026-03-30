@@ -25,7 +25,7 @@ jobs:
 
       - name: Download script from OctoTS-tools
         run: |
-          curl -O https://github.com/OctoTS/OctoTS-tools/tree/feat/collect-data-with-tag/generateSampleData.py
+          curl -O https://raw.githubusercontent.com/OctoTS/OctoTS-tools/refs/heads/feat/collect-data-with-tag/generateSampleData.py
 
       - name: Execute LOC script
         run: |
