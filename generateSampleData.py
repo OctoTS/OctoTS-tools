@@ -3,8 +3,7 @@ import argparse
 from collections import defaultdict
 
 def get_merge_stats(target_dir):
-    """Pobiera autorów i dodane linie ze wszystkich commitów wchodzących w skład ostatniego merge'a."""
-    
+    """Pobiera autorów i dodane linie ze wszystkich commitów z ostatniego merge'a."""
     authors_stats = defaultdict(int)
     
     try:
@@ -35,7 +34,6 @@ def get_merge_stats(target_dir):
                 
             if current_author:
                 parts = line.split('\t')
-                
                 if len(parts) >= 3:
                     added = parts[0]
                     
@@ -54,14 +52,30 @@ def get_merge_stats(target_dir):
 def main():
     parser = argparse.ArgumentParser(description="Git Merge LOC Collector")
     parser.add_argument("target_dir", help="Directory to scan for code")
+    parser.add_argument("--output", help="Path to the temporary CSV file", default=None)
     args = parser.parse_args()
 
     stats = get_merge_stats(args.target_dir)
 
     if stats:
+        csv_lines = []
         for author, added_lines in stats.items():
             if added_lines > 0:
-                print(f"{author},{added_lines}")
+                csv_lines.append(f"{author},{added_lines}")
+                
+        if not csv_lines:
+            return
+
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write("author,lines_of_code\n")
+                for line in csv_lines:
+                    f.write(line + "\n")
+            print(f"Wygenerowano nowy plik tymczasowy: {args.output}")
+        else:
+            print("author,lines_of_code")
+            for line in csv_lines:
+                print(line)
 
 if __name__ == "__main__":
     main()
