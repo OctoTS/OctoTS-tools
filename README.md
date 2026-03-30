@@ -10,8 +10,7 @@ Use this file to generate sample data about your Github repository (author of co
 ### Usage:
 
 
-> **Warning**
->
+> **Warning**  
 >  You have to use it on git repository directory
 
 `python3 generateSampleData.py <dir> [flags]`
