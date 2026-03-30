@@ -4,10 +4,7 @@ on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch:
-#test na pusha
-  push:
-    branches:
-      - feat/collect-data-with-tag
+
 jobs:
   generate-metrics:
     runs-on: ubuntu-latest
