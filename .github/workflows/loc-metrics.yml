@@ -1,0 +1,38 @@
+name: Zbieranie Metryk LOC
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+    
+  workflow_dispatch:
+
+jobs:
+  generate-metrics:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Download script from OctoTS-tools
+        run: |
+          curl -O https://github.com/OctoTS/OctoTS-tools/tree/feat/collect-data-with-tag/generateSampleData.py
+
+      - name: Execute LOC script
+        run: |
+          python generateSampleData.py . --output tmp_metrics.csv
+
+      - name: Upload CSV as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: temporary-loc-metrics
+          path: tmp_metrics.csv
+          retention-days: 1
+          if-no-files-found: ignore
