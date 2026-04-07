@@ -8,7 +8,7 @@ class OctoTS(cmd.Cmd):
     
     def __init__(self):
         super().__init__()
-        self.df = None
+        self.dataFile = None
 
     def do_import(self, filepath):
         """
@@ -30,32 +30,32 @@ class OctoTS(cmd.Cmd):
         
         try:
             try:
-                self.df = pd.read_json(filepath)
+                self.dataFile = pd.read_json(filepath)
                 print("Success: Detected and loaded as JSON.")
             except ValueError:
-                self.df = pd.read_csv(filepath, sep=None, engine='python')
+                self.dataFile = pd.read_csv(filepath, sep=None, engine='python')
                 print("Success: Detected and loaded as CSV.")
                 
         except Exception as e:
             print(f"Failed to load file. Ensure it is valid file. Error: {e}")
-            self.df = None
+            self.dataFile = None
 
     def do_columns(self, arg):
         """
         Show the tags/columns and types available in the loaded dataset.
         Usage: columns
         """
-        if self.df is None:
+        if self.dataFile is None:
             print("Error: No data loaded. Please 'import <filepath>' first.")
             return
         
         print("\nAvailable Columns/Tags:")
         print("-" * 23)
-        for col in self.df.columns:
-            dtype = self.df[col].dtype
+        for col in self.dataFile.columns:
+            dtype = self.dataFile[col].dtype
             print(f" * {col} (Type: {dtype})")
         print("-" * 23)
-        print(f"Total columns: {len(self.df.columns)}\n")
+        print(f"Total columns: {len(self.dataFile.columns)}\n")
 
     def do_exit(self, arg):
         """
