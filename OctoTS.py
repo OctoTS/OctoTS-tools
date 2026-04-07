@@ -10,10 +10,58 @@ class OctoTS(cmd.Cmd):
         super().__init__()
         self.dataFile = None
 
+    def _auto_detect_timecol(self):
+        """
+        Internal method to scan columns for date-like strings and prompt the user.
+        """
+        if self.dataFile is None or self.dataFile.empty:
+            return
+            
+        print("\nScanning for timestamp columns...")
+        found_potential = False
+        
+        for col in self.dataFile.columns:
+            if pd.api.types.is_datetime64_any_dtype(self.dataFile[col]):
+                print(f" -> Success: '{col}' is already recognized as a datetime format.")
+                found_potential = True
+                continue
+                
+            if self.dataFile[col].dtype == 'object':
+                sample_series = self.dataFile[col].dropna()
+                if sample_series.empty:
+                    continue
+                    
+                sample_val = str(sample_series.iloc[0])
+                
+                if any(char in sample_val for char in ['-', '/', ':']):
+                    try:
+                        pd.to_datetime(sample_val)
+                        found_potential = True
+                        
+                        ans = input(f" -> Detected potential timestamp in column '{col}' (e.g., {sample_val}). Convert it? [Y/n]: ").strip().lower()
+                        
+                        if ans in ['', 'y', 'yes']:
+                            print(f"    Converting '{col}' to datetime...")
+                            self.dataFile[col] = pd.to_datetime(self.dataFile[col])
+                            print("    Success.")
+                            return 
+                        else:
+                            print(f"    Skipped '{col}'.")
+                            
+                    except (ValueError, TypeError, pd.errors.ParserError):
+                        pass 
+        
+        if not found_potential:
+            print(" -> Result: No obvious timestamp columns were detected automatically.")
+            print(" -> ACTION REQUIRED: Please use the 'columns' command to check your data,")
+            print(" -> then use 'timecol <column_name>' to manually set your time column.")
+            
+        print("Scan complete.\n")
+
     def do_import(self, filepath):
         """
         Import a text file containing time-series data. 
-        Auto-detects JSON or CSV formats.
+        Auto-detects JSON or CSV formats and scans for timestamps.
         Usage: import <filepath>
         """
         if not filepath:
@@ -35,6 +83,8 @@ class OctoTS(cmd.Cmd):
             except ValueError:
                 self.dataFile = pd.read_csv(filepath, sep=None, engine='python')
                 print("Success: Detected and loaded as CSV.")
+            
+            self._auto_detect_timecol()
                 
         except Exception as e:
             print(f"Failed to load file. Ensure it is a valid file. Error: {e}")
@@ -59,10 +109,8 @@ class OctoTS(cmd.Cmd):
 
     def do_timecol(self, arg):
         """
-        Convert a specific column to mathematical datetime objects.
-        Do this before sorting by time to ensure accurate chronological sorting.
+        Manually convert a specific column to mathematical datetime objects.
         Usage: timecol <column_name>
-        Example: timecol my_timestamp_col
         """
         if self.dataFile is None:
             print("Error: No data loaded. Please 'import <filepath>' first.")
@@ -79,7 +127,6 @@ class OctoTS(cmd.Cmd):
             
         try:
             print(f"Converting '{col_name}' to datetime objects...")
-            # pd.to_datetime automatically parses ISO 8601 and other standard formats
             self.dataFile[col_name] = pd.to_datetime(self.dataFile[col_name])
             print(f"Success: '{col_name}' is now a datetime type. You can verify with 'columns'.")
         except Exception as e:
