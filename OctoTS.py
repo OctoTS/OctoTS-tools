@@ -374,7 +374,11 @@ class OctoTS(cmd.Cmd):
     do_EOF = do_exit
 
 if __name__ == '__main__':
-    try:
-        OctoTS().cmdloop()
-    except KeyboardInterrupt:
-        print("\nExiting...")
+    app = OctoTS()
+    while True:
+        try:
+            app.cmdloop()
+            break  
+        except KeyboardInterrupt:
+            print("^C\n(Use the 'exit' or 'quit' command to close OctoTS)")
+            app.intro = '' 
