@@ -19,7 +19,7 @@ Use this file to generate sample data about your Github repository (author of co
 
 The **OctoTS Batch Processor** (`batchProcessor.py`) is the non-interactive version of the engine, specifically designed for automated environments and CI/CD pipelines (like GitHub Actions). It handles the heavy lifting of data ingestion without requiring user input.
 
-### Batch Features
+## Batch Features
 *   **Automated Ingestion:** Perfect for cron jobs; it processes data from start to finish and exits automatically.
 *   **Pipe Support (stdin):** Seamlessly integrates with other tools. You can pipe raw generator output directly into the processor.
 *   **Instant Timestamping:** Automatically injects a strict ISO 8601 UTC timestamp as the **first column** of every new record.
@@ -34,7 +34,19 @@ pip install -r requirements.txt
 ```
 *(Note: Ensure your requirements.txt contains pandas, and optionally openpyxl for Excel support and pyarrow for Parquet support).*
 
-### Batch Command Reference
+### Input Requirements
+For the **Batch Processor** to work correctly with the Pandas engine, your input (whether it's a file or `stdin`) **must include a header row** with column names. 
+
+**Example of valid input:**
+```csv
+author,lines_of_code
+John Doe,125
+Jane Smith,42
+```
+
+*(Note: If the header is missing, the first row of your data will be incorrectly treated as column names, resulting in data loss).*
+
+## Batch Command Reference
 
 Run the script using positional arguments:
 `python3 batchProcessor.py append <output_type> <input_path|stdin> <output_path>`
