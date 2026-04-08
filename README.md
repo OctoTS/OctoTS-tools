@@ -25,6 +25,15 @@ The **OctoTS Batch Processor** (`batchProcessor.py`) is the non-interactive vers
 *   **Instant Timestamping:** Automatically injects a strict ISO 8601 UTC timestamp as the **first column** of every new record.
 *   **Format Bridging:** Supports reading from one format (e.g., CSV) and appending to another (e.g., Parquet) in a single command.
 
+## Requirements
+
+Ensure you have Python 3 installed. You can install all necessary dependencies for **both the Batch Processor and OctoTS** using the provided requirements file:
+
+```bash
+pip install -r requirements.txt
+```
+*(Note: Ensure your requirements.txt contains pandas, and optionally openpyxl for Excel support and pyarrow for Parquet support).*
+
 ### Batch Command Reference
 
 Run the script using positional arguments:
@@ -62,14 +71,6 @@ OctoTS is a lightweight, interactive Command-Line Interface (CLI) tool designed 
 * **Undo System:** Made a mistake? Use the `undo` command to revert to previous states (keeps up to the last 5 states in memory).
 * **ISO 8601 Export:** Ensures all your datetime columns are strictly formatted to ISO standards (`YYYY-MM-DDThh:mm:ssZ`) when saving.
 
-## Requirements
-
-Ensure you have Python 3 installed. You can install all necessary dependencies for the base tool and various file formats (like Excel and Parquet) using the provided requirements file:
-
-```bash
-pip install -r requirements.txt
-```
-*(Note: Ensure your requirements.txt contains pandas, and optionally openpyxl for Excel support and pyarrow for Parquet support).*
 
 ## Quick Start
 1. Clone or download the script to your local machine.
