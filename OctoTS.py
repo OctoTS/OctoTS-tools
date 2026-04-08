@@ -179,12 +179,114 @@ class OctoTS(cmd.Cmd):
         order_str = 'ascending' if ascending else 'descending'
         print(f"Success: Data sorted by '{col_name}' in {order_str} order.")
 
+    def do_trim(self, arg):
+        """
+        Clean or reduce the dataset. 
+        Usage: 
+          trim missing                           - Removes any rows containing missing (NaN/Null) values.
+          trim spaces                            - Removes leading/trailing whitespace from string columns.
+          trim <number>                          - Keeps only the top <number> of rows (e.g., 'trim 100').
+          trim date <col> <before|after> <date>  - REMOVES rows before or after an ISO timestamp.
+          trim date <col> between <d1> <d2>      - REMOVES rows between two ISO timestamps.
+                                                   Example: trim date timestamp between 2026-04-06T00:00:00Z 2026-04-06T01:19:19Z
+        """
+        if self.dataFile is None:
+            print("Error: No data loaded. Please 'import <filepath>' first.")
+            return
+            
+        args = arg.strip().split()
+        if not args:
+            print("Error: Please specify what to trim. Options: 'missing', 'spaces', a number, or 'date'.")
+            return
+            
+        initial_rows = len(self.dataFile)
+        cmd_type = args[0].lower()
+            
+        if cmd_type == 'missing':
+            self.dataFile.dropna(inplace=True)
+            new_rows = len(self.dataFile)
+            print(f"Success: Removed {initial_rows - new_rows} rows with missing values.")
+            
+        elif cmd_type == 'spaces':
+            str_cols = self.dataFile.select_dtypes(include=['object', 'str']).columns
+            if len(str_cols) == 0:
+                print("Notice: No text columns found to trim spaces from.")
+                return
+                
+            for col in str_cols:
+                self.dataFile[col] = self.dataFile[col].apply(
+                    lambda x: x.strip() if isinstance(x, str) else x
+                )
+            print(f"Success: Trimmed leading and trailing spaces from {len(str_cols)} text columns.")
+            
+        elif cmd_type.isdigit():
+            n = int(cmd_type)
+            self.dataFile = self.dataFile.head(n)
+            new_rows = len(self.dataFile)
+            print(f"Success: Trimmed dataset to the top {new_rows} rows. (Removed {initial_rows - new_rows} rows).")
+            
+        elif cmd_type == 'date':
+            if len(args) < 4:
+                print("Error: Missing arguments for date trimming.")
+                print("Usage: trim date <column_name> <before|after|between> <ISO_timestamp(s)>")
+                return
+                
+            col_name = args[1]
+            operator = args[2].lower()
+            
+            if col_name not in self.dataFile.columns:
+                print(f"Error: Column '{col_name}' not found. Use 'columns' to see available columns.")
+                return
+                
+            if not pd.api.types.is_datetime64_any_dtype(self.dataFile[col_name]):
+                print(f"Error: Column '{col_name}' is not recognized as a datetime type.")
+                print(f"Please run 'timecol {col_name}' to convert it before trimming by date.")
+                return
+                
+            if operator not in ['before', 'after', 'between']:
+                print("Error: Operator must be 'before', 'after', or 'between'.")
+                return
+                
+            if operator == 'between' and len(args) < 5:
+                print("Error: Missing the second date. Usage: trim date <col> between <date1> <date2>")
+                return
+
+            try:
+                date_str1 = args[3]
+                target_date1 = pd.to_datetime(date_str1)
+                
+                if operator == 'after':
+                    self.dataFile = self.dataFile[self.dataFile[col_name] <= target_date1]
+                    action_str = f"removed data after {date_str1}"
+                    
+                elif operator == 'before':
+                    self.dataFile = self.dataFile[self.dataFile[col_name] >= target_date1]
+                    action_str = f"removed data before {date_str1}"
+                    
+                elif operator == 'between':
+                    date_str2 = args[4]
+                    target_date2 = pd.to_datetime(date_str2)
+                    self.dataFile = self.dataFile[
+                        (self.dataFile[col_name] < target_date1) | 
+                        (self.dataFile[col_name] > target_date2)
+                    ]
+                    action_str = f"removed data between {date_str1} and {date_str2}"
+                    
+                new_rows = len(self.dataFile)
+                print(f"Success: {action_str}. Kept {new_rows} rows. (Removed {initial_rows - new_rows} rows).")
+                
+            except Exception as e:
+                print(f"Error parsing dates. Please ensure they are in ISO format (e.g., 2026-04-06T01:19:19Z). Error: {e}")
+
+        else:
+            print("Error: Unknown trim argument. Use 'help trim' to see available options.")
+
     def do_save(self, filepath):
         """
-        Save the current dataset to a file. 
+        Save the current dataset to a file, strictly formatting dates to ISO 8601.
         Supported formats: CSV, JSON, Excel (.xlsx), Parquet, Pickle.
         Usage: save <filepath>
-        Example: save output.parquet
+        Example: save output.csv
         """
         if self.dataFile is None:
             print("Error: No data loaded. Nothing to save.")
@@ -197,21 +299,27 @@ class OctoTS(cmd.Cmd):
         filepath = filepath.strip("\"'")
         ext = os.path.splitext(filepath)[1].lower()
         
+        df_to_save = self.dataFile.copy()
+        
+        for col in df_to_save.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
+                df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
         try:
             if ext == '.json':
-                self.dataFile.to_json(filepath, orient='records', date_format='iso')
+                df_to_save.to_json(filepath, orient='records')
                 print(f"Success: Data saved to JSON at '{filepath}'")
             elif ext in ['.xls', '.xlsx']:
-                self.dataFile.to_excel(filepath, index=False)
+                df_to_save.to_excel(filepath, index=False)
                 print(f"Success: Data saved to Excel at '{filepath}'")
             elif ext == '.parquet':
-                self.dataFile.to_parquet(filepath, index=False)
+                df_to_save.to_parquet(filepath, index=False)
                 print(f"Success: Data saved to Parquet at '{filepath}'")
             elif ext in ['.pkl', '.pickle']:
-                self.dataFile.to_pickle(filepath)
+                df_to_save.to_pickle(filepath)
                 print(f"Success: Data saved to Pickle at '{filepath}'")
             else:
-                self.dataFile.to_csv(filepath, index=False)
+                df_to_save.to_csv(filepath, index=False)
                 print(f"Success: Data saved to CSV at '{filepath}'")
         except ImportError as ie:
             print(f"Error: Missing a library required to save this format: {ie}")
