@@ -1,1 +1,8 @@
-# No external dependencies required for this script
+# Core library for data manipulation and time-series analysis
+pandas
+
+# Required engine for reading and writing Excel files (.xlsx)
+openpyxl
+
+# Required engine for reading and writing Parquet files (.parquet)
+pyarrow

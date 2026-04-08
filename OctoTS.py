@@ -60,8 +60,8 @@ class OctoTS(cmd.Cmd):
 
     def do_import(self, filepath):
         """
-        Import a text file containing time-series data. 
-        Auto-detects JSON or CSV formats and scans for timestamps.
+        Import a file containing time-series data.
+        Supported formats: CSV, JSON, Excel (.xlsx/.xls), Parquet, Pickle.
         Usage: import <filepath>
         """
         if not filepath:
@@ -74,18 +74,35 @@ class OctoTS(cmd.Cmd):
             print(f"Error: File '{filepath}' not found.")
             return
 
-        print(f"Attempting to load and auto-detect format for '{filepath}'...")
+        print(f"Attempting to load '{filepath}'...")
+        ext = os.path.splitext(filepath)[1].lower()
         
         try:
-            try:
+            if ext == '.json':
                 self.dataFile = pd.read_json(filepath)
-                print("Success: Detected and loaded as JSON.")
-            except ValueError:
-                self.dataFile = pd.read_csv(filepath, sep=None, engine='python')
-                print("Success: Detected and loaded as CSV.")
+                print("Success: Loaded as JSON.")
+            elif ext in ['.xls', '.xlsx']:
+                self.dataFile = pd.read_excel(filepath)
+                print(f"Success: Loaded as Excel ({ext}).")
+            elif ext == '.parquet':
+                self.dataFile = pd.read_parquet(filepath)
+                print("Success: Loaded as Parquet.")
+            elif ext in ['.pkl', '.pickle']:
+                self.dataFile = pd.read_pickle(filepath)
+                print("Success: Loaded as Pickle.")
+            else:
+                try:
+                    self.dataFile = pd.read_csv(filepath, sep=None, engine='python')
+                    print(f"Success: Detected and loaded as delimited text/CSV.")
+                except ValueError:
+                    self.dataFile = pd.read_json(filepath)
+                    print("Success: Detected and loaded as JSON.")
             
             self._auto_detect_timecol()
                 
+        except ImportError as ie:
+            print(f"Missing dependency for this file type: {ie}")
+            self.dataFile = None
         except Exception as e:
             print(f"Failed to load file. Ensure it is a valid file. Error: {e}")
             self.dataFile = None
@@ -164,9 +181,10 @@ class OctoTS(cmd.Cmd):
 
     def do_save(self, filepath):
         """
-        Save the current dataset to a file (CSV or JSON).
+        Save the current dataset to a file. 
+        Supported formats: CSV, JSON, Excel (.xlsx), Parquet, Pickle.
         Usage: save <filepath>
-        Example: save output.json
+        Example: save output.parquet
         """
         if self.dataFile is None:
             print("Error: No data loaded. Nothing to save.")
@@ -177,14 +195,26 @@ class OctoTS(cmd.Cmd):
             return
             
         filepath = filepath.strip("\"'")
+        ext = os.path.splitext(filepath)[1].lower()
         
         try:
-            if filepath.lower().endswith('.json'):
+            if ext == '.json':
                 self.dataFile.to_json(filepath, orient='records', date_format='iso')
                 print(f"Success: Data saved to JSON at '{filepath}'")
+            elif ext in ['.xls', '.xlsx']:
+                self.dataFile.to_excel(filepath, index=False)
+                print(f"Success: Data saved to Excel at '{filepath}'")
+            elif ext == '.parquet':
+                self.dataFile.to_parquet(filepath, index=False)
+                print(f"Success: Data saved to Parquet at '{filepath}'")
+            elif ext in ['.pkl', '.pickle']:
+                self.dataFile.to_pickle(filepath)
+                print(f"Success: Data saved to Pickle at '{filepath}'")
             else:
                 self.dataFile.to_csv(filepath, index=False)
                 print(f"Success: Data saved to CSV at '{filepath}'")
+        except ImportError as ie:
+            print(f"Error: Missing a library required to save this format: {ie}")
         except Exception as e:
             print(f"Error saving file: {e}")
 
@@ -193,7 +223,7 @@ class OctoTS(cmd.Cmd):
         Exit the interactive shell.
         Usage: exit (or quit)
         """
-        print("Closing the time series shell. Goodbye!")
+        print("Closing the OctoTS shell. Goodbye!")
         return True
 
     do_quit = do_exit
