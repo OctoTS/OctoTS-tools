@@ -15,6 +15,41 @@ Use this file to generate sample data about your Github repository (author of co
 
 `python3 generateSampleData.py <dir> [flags]`
 
+# OctoTS Batch ⚙️
+
+The **OctoTS Batch Processor** (`batchProcessor.py`) is the non-interactive version of the engine, specifically designed for automated environments and CI/CD pipelines (like GitHub Actions). It handles the heavy lifting of data ingestion without requiring user input.
+
+### Batch Features
+*   **Automated Ingestion:** Perfect for cron jobs; it processes data from start to finish and exits automatically.
+*   **Pipe Support (stdin):** Seamlessly integrates with other tools. You can pipe raw generator output directly into the processor.
+*   **Instant Timestamping:** Automatically injects a strict ISO 8601 UTC timestamp as the **first column** of every new record.
+*   **Format Bridging:** Supports reading from one format (e.g., CSV) and appending to another (e.g., Parquet) in a single command.
+
+### Batch Command Reference
+
+Run the script using positional arguments:
+`python3 batchProcessor.py append <output_type> <input_path|stdin> <output_path>`
+
+#### Examples:
+
+**1. Basic CSV Append**
+Appends new local data to a CSV database:
+```bash
+python3 batchProcessor.py append csv new_data.csv database.csv
+```
+
+**2. Pipeline Mode (CI/CD Ready)**
+Receives data from another script and saves it to a Parquet store:
+```bash
+python3 data_generator.py | python3 batchProcessor.py append parquet stdin database.parquet
+```
+
+**3. JSON to Excel Conversion**
+Takes a JSON file, adds timestamps, and merges it into an Excel report:
+```bash
+python3 batchProcessor.py append excel updates.json report.xlsx
+```
+
 # OctoTS 🐙
 
 OctoTS is a lightweight, interactive Command-Line Interface (CLI) tool designed for quick and easy time-series data manipulation. Built on top of Python's `cmd` module and `pandas`, it allows you to import datasets, auto-detect and convert timestamps, filter data by specific date ranges, and export your cleaned time-series data with strict ISO 8601 formatting.
