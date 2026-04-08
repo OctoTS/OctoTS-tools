@@ -9,6 +9,17 @@ class OctoTS(cmd.Cmd):
     def __init__(self):
         super().__init__()
         self.dataFile = None
+        self.history = [] 
+
+    def _save_history(self):
+        """
+        Saves a copy of the current dataset to the history stack before modifying it.
+        Keeps the last 5 states to save memory.
+        """
+        if self.dataFile is not None:
+            self.history.append(self.dataFile.copy())
+            if len(self.history) > 5:
+                self.history.pop(0)
 
     def _auto_detect_timecol(self):
         """
@@ -41,6 +52,7 @@ class OctoTS(cmd.Cmd):
                         ans = input(f" -> Detected potential timestamp in column '{col}' (e.g., {sample_val}). Convert it? [Y/n]: ").strip().lower()
                         
                         if ans in ['', 'y', 'yes']:
+                            self._save_history() 
                             print(f"    Converting '{col}' to datetime...")
                             self.dataFile[col] = pd.to_datetime(self.dataFile[col])
                             print("    Success.")
@@ -98,6 +110,7 @@ class OctoTS(cmd.Cmd):
                     self.dataFile = pd.read_json(filepath)
                     print("Success: Detected and loaded as JSON.")
             
+            self.history = []
             self._auto_detect_timecol()
                 
         except ImportError as ie:
@@ -143,10 +156,12 @@ class OctoTS(cmd.Cmd):
             return
             
         try:
+            self._save_history()
             print(f"Converting '{col_name}' to datetime objects...")
             self.dataFile[col_name] = pd.to_datetime(self.dataFile[col_name])
             print(f"Success: '{col_name}' is now a datetime type. You can verify with 'columns'.")
         except Exception as e:
+            self.history.pop()
             print(f"Error converting column to datetime. Are you sure it contains valid dates? Error: {e}")
 
     def do_sort(self, arg):
@@ -175,6 +190,7 @@ class OctoTS(cmd.Cmd):
             print(f"Error: Column '{col_name}' not found. Use 'columns' to see available columns.")
             return
             
+        self._save_history() # Backup before sorting
         self.dataFile.sort_values(by=col_name, ascending=ascending, inplace=True)
         order_str = 'ascending' if ascending else 'descending'
         print(f"Success: Data sorted by '{col_name}' in {order_str} order.")
@@ -203,6 +219,7 @@ class OctoTS(cmd.Cmd):
         cmd_type = args[0].lower()
             
         if cmd_type == 'missing':
+            self._save_history()
             self.dataFile.dropna(inplace=True)
             new_rows = len(self.dataFile)
             print(f"Success: Removed {initial_rows - new_rows} rows with missing values.")
@@ -213,6 +230,7 @@ class OctoTS(cmd.Cmd):
                 print("Notice: No text columns found to trim spaces from.")
                 return
                 
+            self._save_history()
             for col in str_cols:
                 self.dataFile[col] = self.dataFile[col].apply(
                     lambda x: x.strip() if isinstance(x, str) else x
@@ -220,6 +238,7 @@ class OctoTS(cmd.Cmd):
             print(f"Success: Trimmed leading and trailing spaces from {len(str_cols)} text columns.")
             
         elif cmd_type.isdigit():
+            self._save_history()
             n = int(cmd_type)
             self.dataFile = self.dataFile.head(n)
             new_rows = len(self.dataFile)
@@ -255,6 +274,8 @@ class OctoTS(cmd.Cmd):
                 date_str1 = args[3]
                 target_date1 = pd.to_datetime(date_str1)
                 
+                self._save_history() 
+                
                 if operator == 'after':
                     self.dataFile = self.dataFile[self.dataFile[col_name] <= target_date1]
                     action_str = f"removed data after {date_str1}"
@@ -276,10 +297,23 @@ class OctoTS(cmd.Cmd):
                 print(f"Success: {action_str}. Kept {new_rows} rows. (Removed {initial_rows - new_rows} rows).")
                 
             except Exception as e:
+                self.history.pop() 
                 print(f"Error parsing dates. Please ensure they are in ISO format (e.g., 2026-04-06T01:19:19Z). Error: {e}")
 
         else:
             print("Error: Unknown trim argument. Use 'help trim' to see available options.")
+
+    def do_undo(self, arg):
+        """
+        Undo the last modification (trim, sort, timecol).
+        Usage: undo
+        """
+        if not self.history:
+            print("Error: Nothing to undo. Either no changes have been made or you reached the undo limit.")
+            return
+            
+        self.dataFile = self.history.pop()
+        print(f"Success: Reverted to the previous dataset state. (Current rows: {len(self.dataFile)})")
 
     def do_save(self, filepath):
         """
@@ -299,8 +333,10 @@ class OctoTS(cmd.Cmd):
         filepath = filepath.strip("\"'")
         ext = os.path.splitext(filepath)[1].lower()
         
+        # Create a temporary copy so we don't mess up the datatypes in the active shell
         df_to_save = self.dataFile.copy()
         
+        # Force all datetime columns into strict ISO format strings before saving
         for col in df_to_save.columns:
             if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
                 df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
