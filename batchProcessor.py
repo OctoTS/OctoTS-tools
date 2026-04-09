@@ -19,18 +19,28 @@ def load_input(source):
     else: return pd.read_csv(source)
 
 def save_output(df, path, storage_type):
-    """Handles appending to different formats."""
+    """Handles appending to different formats using explicit storage engine."""
     file_exists = os.path.isfile(path)
     
-    # CASE: CSV - fast append
+    # CASE: CSV remains unchanged (fast append)
     if storage_type == 'csv':
         df.to_csv(path, mode='a', index=False, header=not file_exists)
         return
 
-    # CASE: Binary formats - Read-Modify-Write
+    # CASE: Binary/JSON formats (Read-Modify-Write)
     if file_exists:
-        existing_df = load_input(path)
-        combined = pd.concat([existing_df, df], ignore_index=True)
+        try:
+            if storage_type == 'json': existing_df = pd.read_json(path)
+            elif storage_type == 'parquet': existing_df = pd.read_parquet(path)
+            elif storage_type in ['excel', 'xlsx']: existing_df = pd.read_excel(path)
+            elif storage_type == 'pickle': existing_df = pd.read_pickle(path)
+            else:
+                existing_df = pd.read_csv(path)
+                
+            combined = pd.concat([existing_df, df], ignore_index=True)
+        except Exception as e:
+            print(f"Error reading existing database: {e}. Creating new file instead.")
+            combined = df
     else:
         combined = df
 
