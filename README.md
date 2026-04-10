@@ -85,6 +85,15 @@ OctoTS is a lightweight, interactive Command-Line Interface (CLI) tool designed 
 
 
 ## Quick Start
+
+### Linux
+
+```bash
+curl -sL https://raw.githubusercontent.com/OctoTS/OctoTS-tools/refs/heads/main/install.sh | bash
+```
+
+### Other system
+
 1. Clone or download the script to your local machine.
 2. Run the script via your terminal:
 
