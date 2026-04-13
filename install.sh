@@ -2,9 +2,8 @@
 
 set -e
 
-
 OCTOTS_URL="https://raw.githubusercontent.com/OctoTS/OctoTS-tools/refs/heads/main/OctoTS.py"
-
+REQUIREMENTS_URL="https://raw.githubusercontent.com/OctoTS/OctoTS-tools/refs/heads/main/requirements.txt"
 
 echo "🐙 Starting OctoTS Installation..."
 
@@ -36,8 +35,14 @@ if ! python3 -m venv "$VENV_DIR"; then
     exit 1
 fi
 
-echo "📦 Installing dependencies (pandas) safely..."
-"$VENV_DIR/bin/pip" install pandas --quiet
+echo "⬇️ Downloading requirements.txt from GitHub..."
+if ! curl -sL -f "$REQUIREMENTS_URL" -o "$INSTALL_DIR/requirements.txt"; then
+    echo "❌ Error: Failed to download requirements.txt. Please make sure the file exists in the repository."
+    exit 1
+fi
+
+echo "📦 Installing dependencies from requirements.txt safely..."
+"$VENV_DIR/bin/pip" install -r "$INSTALL_DIR/requirements.txt" --quiet
 
 echo "⬇️ Downloading latest OctoTS from GitHub..."
 if ! curl -sL -f "$OCTOTS_URL" -o "$INSTALL_DIR/octots.py"; then
