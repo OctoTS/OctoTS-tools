@@ -1,6 +1,8 @@
 import cmd
 import os
 import pandas as pd
+import io 
+import re
 
 class OctoTS(cmd.Cmd):
     intro = 'Welcome to the OctoTS CLI. Type "help" or "?" to list commands.\n'
@@ -23,7 +25,9 @@ class OctoTS(cmd.Cmd):
 
     def _auto_detect_timecol(self):
         """
-        Internal method to scan columns for date-like strings and prompt the user.
+        Internal method to scan columns for date-like strings.
+        Auto-converts unambiguous formats (YYYY-MM-DD or obvious column names).
+        Prompts for other potential, ambiguous date formats.
         """
         if self.dataFile is None or self.dataFile.empty:
             return
@@ -37,19 +41,34 @@ class OctoTS(cmd.Cmd):
                 found_potential = True
                 continue
                 
-            if self.dataFile[col].dtype == 'object':
-                sample_series = self.dataFile[col].dropna()
+            if self.dataFile[col].dtype == 'object' or self.dataFile[col].dtype == 'string':
+                sample_series = self.dataFile[col].dropna().head(5)
                 if sample_series.empty:
                     continue
                     
-                sample_val = str(sample_series.iloc[0])
+                sample_val = str(sample_series.iloc[0]).strip()
                 
-                if any(char in sample_val for char in ['-', '/', ':']):
-                    try:
-                        pd.to_datetime(sample_val)
-                        found_potential = True
-                        
-                        ans = input(f" -> Detected potential timestamp in column '{col}' (e.g., {sample_val}). Convert it? [Y/n]: ").strip().lower()
+                has_date_chars = any(char in sample_val for char in ['-', '/', ':'])
+                if not has_date_chars:
+                    continue
+                
+                try:
+                    pd.to_datetime(sample_series)
+                    found_potential = True
+                    
+                    is_unambiguous_format = bool(re.match(r'^\d{4}-\d{2}-\d{2}', sample_val)) or ('T' in sample_val)
+                    
+                    col_lower = str(col).lower()
+                    is_obvious_name = col_lower in ['timestamp', 'time', 'date', 'datetime', 'tstamp']
+                    
+                    if is_unambiguous_format or is_obvious_name:
+                        self._save_history()
+                        print(f" -> Auto-detected safe timestamp in '{col}'. Converting automatically...")
+                        self.dataFile[col] = pd.to_datetime(self.dataFile[col])
+                        print("    Success.")
+                        return 
+                    else:
+                        ans = input(f" -> Detected potential timestamp in '{col}' (e.g., {sample_val}). Convert it? [Y/n]: ").strip().lower()
                         
                         if ans in ['', 'y', 'yes']:
                             self._save_history() 
@@ -60,12 +79,12 @@ class OctoTS(cmd.Cmd):
                         else:
                             print(f"    Skipped '{col}'.")
                             
-                    except (ValueError, TypeError, pd.errors.ParserError):
-                        pass 
+                except (ValueError, TypeError, pd.errors.ParserError):
+                    pass 
         
         if not found_potential:
             print(" -> Result: No obvious timestamp columns were detected automatically.")
-            print(" -> ACTION REQUIRED: Please use the 'columns' command to check your data,")
+            print(" -> ACTION REQUIRED: Please use 'show columns' to check your data,")
             print(" -> then use 'timecol <column_name>' to manually set your time column.")
             
         print("Scan complete.\n")
@@ -111,7 +130,10 @@ class OctoTS(cmd.Cmd):
                     print("Success: Detected and loaded as JSON.")
             
             self.history = []
+            
             self._auto_detect_timecol()
+            
+            self.do_show('info')
                 
         except ImportError as ie:
             print(f"Missing dependency for this file type: {ie}")
@@ -139,7 +161,6 @@ class OctoTS(cmd.Cmd):
             print("Error: Please specify what to show. Options: columns, rows, head, tail, info.")
             return
 
-        # Handle 'show total rows' -> treat as 'rows'
         subcmd = args[0]
         if subcmd == 'total' and len(args) > 1 and args[1] == 'rows':
             subcmd = 'rows'
@@ -177,8 +198,6 @@ class OctoTS(cmd.Cmd):
             print(f"Rows: {len(self.dataFile)}")
             print(f"Columns: {len(self.dataFile.columns)}")
             print("\nMemory Usage:")
-            # Use pandas built-in info, but catch it to format nicely
-            import io
             buffer = io.StringIO()
             self.dataFile.info(buf=buffer, memory_usage='deep', verbose=False)
             print(buffer.getvalue())
