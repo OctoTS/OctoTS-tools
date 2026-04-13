@@ -120,22 +120,72 @@ class OctoTS(cmd.Cmd):
             print(f"Failed to load file. Ensure it is a valid file. Error: {e}")
             self.dataFile = None
 
-    def do_columns(self, arg):
+    def do_show(self, arg):
         """
-        Show the tags/columns and types available in the loaded dataset.
-        Usage: columns
+        Display information about the loaded dataset.
+        Usage:
+          show columns     - Show available columns and their data types.
+          show rows        - Show the total number of rows in the dataset.
+          show head [n]    - Show the first 5 (or n) rows of the dataset.
+          show tail [n]    - Show the last 5 (or n) rows of the dataset.
+          show info        - Show a general summary of the dataset.
         """
         if self.dataFile is None:
             print("Error: No data loaded. Please 'import <filepath>' first.")
             return
-        
-        print("\nAvailable Columns/Tags:")
-        print("-" * 23)
-        for col in self.dataFile.columns:
-            dtype = self.dataFile[col].dtype
-            print(f" * {col} (Type: {dtype})")
-        print("-" * 23)
-        print(f"Total columns: {len(self.dataFile.columns)}\n")
+
+        args = arg.strip().lower().split()
+        if not args:
+            print("Error: Please specify what to show. Options: columns, rows, head, tail, info.")
+            return
+
+        # Handle 'show total rows' -> treat as 'rows'
+        subcmd = args[0]
+        if subcmd == 'total' and len(args) > 1 and args[1] == 'rows':
+            subcmd = 'rows'
+
+        if subcmd == 'columns':
+            print("\nAvailable Columns/Tags:")
+            print("-" * 30)
+            for col in self.dataFile.columns:
+                dtype = self.dataFile[col].dtype
+                print(f" * {col} (Type: {dtype})")
+            print("-" * 30)
+            print(f"Total columns: {len(self.dataFile.columns)}\n")
+
+        elif subcmd == 'rows':
+            print(f"\nTotal rows in dataset: {len(self.dataFile)}\n")
+
+        elif subcmd == 'head':
+            n = 5
+            if len(args) > 1 and args[-1].isdigit():
+                n = int(args[-1])
+            print(f"\n--- First {n} Rows ---")
+            print(self.dataFile.head(n).to_string())
+            print("-" * 20 + "\n")
+
+        elif subcmd == 'tail':
+            n = 5
+            if len(args) > 1 and args[-1].isdigit():
+                n = int(args[-1])
+            print(f"\n--- Last {n} Rows ---")
+            print(self.dataFile.tail(n).to_string())
+            print("-" * 20 + "\n")
+
+        elif subcmd == 'info':
+            print("\n--- Dataset Summary ---")
+            print(f"Rows: {len(self.dataFile)}")
+            print(f"Columns: {len(self.dataFile.columns)}")
+            print("\nMemory Usage:")
+            # Use pandas built-in info, but catch it to format nicely
+            import io
+            buffer = io.StringIO()
+            self.dataFile.info(buf=buffer, memory_usage='deep', verbose=False)
+            print(buffer.getvalue())
+            print("-" * 23 + "\n")
+
+        else:
+            print(f"Error: Unknown show argument '{subcmd}'. Use 'help show' to see available options.")
 
     def do_timecol(self, arg):
         """
