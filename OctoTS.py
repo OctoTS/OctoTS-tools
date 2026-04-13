@@ -12,6 +12,7 @@ class OctoTS(cmd.Cmd):
         super().__init__()
         self.dataFile = None
         self.history = [] 
+        self.custom_roles = {}
 
     def _save_history(self):
         """
@@ -130,6 +131,7 @@ class OctoTS(cmd.Cmd):
                     print("Success: Detected and loaded as JSON.")
             
             self.history = []
+            self.custom_roles = {}
             
             self._auto_detect_timecol()
             
@@ -151,6 +153,7 @@ class OctoTS(cmd.Cmd):
           show head [n]    - Show the first 5 (or n) rows of the dataset.
           show tail [n]    - Show the last 5 (or n) rows of the dataset.
           show info        - Show a general summary of the dataset.
+          show roles       - Auto-detect which columns are Time, Labels, or Values.
         """
         if self.dataFile is None:
             print("Error: No data loaded. Please 'import <filepath>' first.")
@@ -158,7 +161,7 @@ class OctoTS(cmd.Cmd):
 
         args = arg.strip().lower().split()
         if not args:
-            print("Error: Please specify what to show. Options: columns, rows, head, tail, info.")
+            print("Error: Please specify what to show. Options: columns, rows, head, tail, info, roles.")
             return
 
         subcmd = args[0]
@@ -198,10 +201,56 @@ class OctoTS(cmd.Cmd):
             print(f"Rows: {len(self.dataFile)}")
             print(f"Columns: {len(self.dataFile.columns)}")
             print("\nMemory Usage:")
+            import io
             buffer = io.StringIO()
             self.dataFile.info(buf=buffer, memory_usage='deep', verbose=False)
             print(buffer.getvalue())
             print("-" * 23 + "\n")
+            
+        elif subcmd in ['roles', 'profile']:
+            print("\n--- Column Roles (Auto-Detected & Manual) ---")
+            time_cols = []
+            label_cols = []
+            value_cols = []
+            
+            for col in self.dataFile.columns:
+                # 0. SPRAWDZAMY RĘCZNE NADPISANIE
+                if col in self.custom_roles:
+                    role = self.custom_roles[col]
+                    display_name = f"{col} (manual override)"
+                    if role == 'time': time_cols.append(display_name)
+                    elif role == 'label': label_cols.append(display_name)
+                    elif role == 'value': value_cols.append(display_name)
+                    continue # Pomijamy autodetect
+                
+                # 1. Czas (Autodetect)
+                if pd.api.types.is_datetime64_any_dtype(self.dataFile[col]):
+                    time_cols.append(col)
+                # 2. Typowe Etykiety (tekst, bool, kategorie)
+                elif self.dataFile[col].dtype == 'object' or self.dataFile[col].dtype == 'bool' or self.dataFile[col].dtype.name == 'category':
+                    label_cols.append(col)
+                # 3. Liczby (rozróżnienie na Float vs Int)
+                elif pd.api.types.is_numeric_dtype(self.dataFile[col]):
+                    unique_count = self.dataFile[col].nunique()
+                    
+                    if pd.api.types.is_float_dtype(self.dataFile[col]):
+                        value_cols.append(col)
+                    elif unique_count <= 5: 
+                        label_cols.append(f"{col} (numeric label, {unique_count} unique)")
+                    else:
+                        value_cols.append(col)
+                else:
+                    label_cols.append(col) # Fallback
+            
+            print(f"\n🕒 Time/Index Columns ({len(time_cols)}):")
+            for c in time_cols: print(f"  * {c}")
+            
+            print(f"\n🏷️  Labels/Dimensions ({len(label_cols)}):")
+            for c in label_cols: print(f"  * {c}")
+            
+            print(f"\n📈 Values/Metrics ({len(value_cols)}):")
+            for c in value_cols: print(f"  * {c}")
+            print("-" * 34 + "\n")
 
         else:
             print(f"Error: Unknown show argument '{subcmd}'. Use 'help show' to see available options.")
@@ -454,6 +503,41 @@ class OctoTS(cmd.Cmd):
         aby zapobiec powtarzaniu ostatniej komendy po wciśnięciu Enter.
         """
         pass
+
+    
+    def do_setrole(self, arg):
+        """
+        Manually assign a role to a column. 
+        Overrides auto-detection in 'show roles'.
+        Usage: setrole <column_name> <time|label|value>
+        Example: setrole City ID label
+        """
+        if self.dataFile is None:
+            print("Error: No data loaded.")
+            return
+
+        args = arg.split()
+        if len(args) < 2:
+            print("Error: Invalid arguments. Usage: setrole <column_name> <time|label|value>")
+            return
+
+        role = args[-1].lower()
+        col_name = " ".join(args[:-1])
+
+        if col_name not in self.dataFile.columns:
+            print(f"Error: Column '{col_name}' not found in dataset.")
+            return
+
+        if role not in ['time', 'label', 'value']:
+            print("Error: Role must be exactly 'time', 'label', or 'value'.")
+            return
+
+        self.custom_roles[col_name] = role
+        print(f"Success: Column '{col_name}' manually forced to role: '{role.upper()}'.")
+        
+        if role == 'time' and not pd.api.types.is_datetime64_any_dtype(self.dataFile[col_name]):
+            print(f"Notice: You marked this as Time, but it's not a datetime object.")
+            print(f"Consider running: timecol {col_name}")
 
     do_quit = do_exit
     do_EOF = do_exit
