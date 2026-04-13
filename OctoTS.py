@@ -201,7 +201,7 @@ class OctoTS(cmd.Cmd):
         Usage: 
           trim missing                           - Removes any rows containing missing (NaN/Null) values.
           trim spaces                            - Removes leading/trailing whitespace from string columns.
-          trim <number>                          - Keeps only the top <number> of rows (e.g., 'trim 100').
+          trim <head|tail> <number>              - Keeps only the <top|bottom> <number> of rows (e.g., 'trim head 100').
           trim date <col> <before|after> <date>  - REMOVES rows before or after an ISO timestamp.
           trim date <col> between <d1> <d2>      - REMOVES rows between two ISO timestamps.
                                                    Example: trim date timestamp between 2026-04-06T00:00:00Z 2026-04-06T01:19:19Z
@@ -212,7 +212,7 @@ class OctoTS(cmd.Cmd):
             
         args = arg.strip().split()
         if not args:
-            print("Error: Please specify what to trim. Options: 'missing', 'spaces', a number, or 'date'.")
+            print("Error: Please specify what to trim. Options: 'missing', 'spaces', 'head <n>', 'tail <n>' or 'date'.")
             return
             
         initial_rows = len(self.dataFile)
@@ -237,12 +237,21 @@ class OctoTS(cmd.Cmd):
                 )
             print(f"Success: Trimmed leading and trailing spaces from {len(str_cols)} text columns.")
             
-        elif cmd_type.isdigit():
+        elif cmd_type in ['head', 'tail']:
+            if len(args) < 2 or not args[1].isdigit():
+                print(f"Error: Missing or invalid number. Usage: trim {cmd_type} <number>")
+                return
+                
             self._save_history()
-            n = int(cmd_type)
-            self.dataFile = self.dataFile.head(n)
+            n = int(args[1])
+            
+            if cmd_type == 'head':
+                self.dataFile = self.dataFile.head(n)
+            else:
+                self.dataFile = self.dataFile.tail(n)
+                
             new_rows = len(self.dataFile)
-            print(f"Success: Trimmed dataset to the top {new_rows} rows. (Removed {initial_rows - new_rows} rows).")
+            print(f"Success: Trimmed dataset to the {cmd_type} {new_rows} rows. (Removed {initial_rows - new_rows} rows).")
             
         elif cmd_type == 'date':
             if len(args) < 4:
