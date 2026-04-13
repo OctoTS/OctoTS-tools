@@ -1,8 +1,17 @@
-# Core library for data manipulation and time-series analysis
-pandas
+# Core library for data manipulation and time-series analysis 
+pandas 
 
-# Required engine for reading and writing Excel files (.xlsx)
-openpyxl
+# Required engine for reading and writing Excel files (.xlsx) 
+openpyxl 
 
-# Required engine for reading and writing Parquet files (.parquet)
-pyarrow
+# Required engine for reading and writing Parquet and Feather files 
+pyarrow 
+
+# Required engine for reading and writing XML files, as well as fast HTML table parsing
+lxml 
+
+# Required engine for reading and writing HDF5 files (.h5, .hdf5)
+tables 
+
+# Recommended secondary parser for reading complex HTML files/websites reliably
+html5lib

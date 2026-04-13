@@ -95,16 +95,15 @@ class OctoTS(cmd.Cmd):
     def do_import(self, filepath):
         """
         Import a file containing time-series data from a local path or URL.
-        Supported formats: CSV, JSON, Excel (.xlsx/.xls), Parquet, Pickle.
+        Supported formats: CSV, TSV, JSON, Excel, Parquet, Pickle, XML, Feather, HTML, HDF5.
         Usage: import <filepath_or_url>
-        Example: import https://raw.githubusercontent.com/user/repo/main/data.csv
+        Example: import https://raw.githubusercontent.com/user/repo/main/data.xml
         """
         if not filepath:
             print("Error: Please provide a file path or URL. Example: import data.csv")
             return
         
         filepath = filepath.strip("\"'")
-        
         is_url = filepath.startswith('http://') or filepath.startswith('https://')
         
         if not is_url and not os.path.exists(filepath):
@@ -133,6 +132,19 @@ class OctoTS(cmd.Cmd):
             elif ext in ['.pkl', '.pickle']:
                 self.dataFile = pd.read_pickle(filepath)
                 print(f"Success: Loaded Pickle from {source_type}.")
+            elif ext == '.xml':
+                self.dataFile = pd.read_xml(filepath)
+                print(f"Success: Loaded XML from {source_type}.")
+            elif ext in ['.feather', '.ftr']:
+                self.dataFile = pd.read_feather(filepath)
+                print(f"Success: Loaded Feather from {source_type}.")
+            elif ext in ['.h5', '.hdf5']:
+                self.dataFile = pd.read_hdf(filepath)
+                print(f"Success: Loaded HDF5 from {source_type}.")
+            elif ext in ['.html', '.htm']:
+                dfs = pd.read_html(filepath)
+                self.dataFile = dfs[0] 
+                print(f"Success: Loaded HTML table (extracted table 1 of {len(dfs)}) from {source_type}.")
             else:
                 try:
                     self.dataFile = pd.read_csv(filepath, sep=None, engine='python')
@@ -143,16 +155,16 @@ class OctoTS(cmd.Cmd):
             
             self.history = []
             self.custom_roles = {}
-            
             self._auto_detect_timecol()
             self.do_show('info')
             self.do_show('roles')
                 
         except ImportError as ie:
-            print(f"Missing dependency for this file type: {ie}")
+            print(f"\nMissing dependency to read this file type: {ie}")
+            print("Tip: Run 'pip install lxml pyarrow tables html5lib openpyxl' to enable all formats.")
             self.dataFile = None
         except Exception as e:
-            print(f"Failed to load {source_type}. Ensure the path/URL is correct and publicly accessible. Error: {e}")
+            print(f"Failed to load {source_type}. Ensure the path/URL is correct and supported. Error: {e}")
             self.dataFile = None
 
     def do_show(self, arg):
@@ -231,6 +243,7 @@ class OctoTS(cmd.Cmd):
                     if role == 'time': time_cols.append(display_name)
                     elif role == 'label': label_cols.append(display_name)
                     elif role == 'value': value_cols.append(display_name)
+                    continue
                 
                 if pd.api.types.is_datetime64_any_dtype(self.dataFile[col]):
                     time_cols.append(col)
@@ -314,7 +327,7 @@ class OctoTS(cmd.Cmd):
             print(f"Error: Column '{col_name}' not found. Use 'columns' to see available columns.")
             return
             
-        self._save_history() # Backup before sorting
+        self._save_history()
         self.dataFile.sort_values(by=col_name, ascending=ascending, inplace=True)
         order_str = 'ascending' if ascending else 'descending'
         print(f"Success: Data sorted by '{col_name}' in {order_str} order.")
@@ -325,10 +338,9 @@ class OctoTS(cmd.Cmd):
         Usage: 
           trim missing                           - Removes any rows containing missing (NaN/Null) values.
           trim spaces                            - Removes leading/trailing whitespace from string columns.
-          trim <head|tail> <number>              - Keeps only the <top|bottom> <number> of rows (e.g., 'trim head 100').
+          trim <head|tail> <number>              - Keeps only the <top|bottom> <number> of rows.
           trim date <col> <before|after> <date>  - REMOVES rows before or after an ISO timestamp.
           trim date <col> between <d1> <d2>      - REMOVES rows between two ISO timestamps.
-                                                   Example: trim date timestamp between 2026-04-06T00:00:00Z 2026-04-06T01:19:19Z
         """
         if self.dataFile is None:
             print("Error: No data loaded. Please 'import <filepath>' first.")
@@ -448,69 +460,79 @@ class OctoTS(cmd.Cmd):
         self.dataFile = self.history.pop()
         print(f"Success: Reverted to the previous dataset state. (Current rows: {len(self.dataFile)})")
 
-    def do_save(self, filepath):
+    def do_export(self, filepath):
         """
-        Save the current dataset to a file, strictly formatting dates to ISO 8601.
-        Supported formats: CSV, JSON, Excel (.xlsx), Parquet, Pickle.
-        Usage: save <filepath>
-        Example: save output.csv
+        Export/Save the current dataset to a file.
+        Supported formats: CSV, JSON, Excel, Parquet, Pickle, XML, Feather, HTML, HDF5.
+        Usage: export <filepath> (or save <filepath>)
+        Example: export processed_data.parquet
         """
         if self.dataFile is None:
-            print("Error: No data loaded. Nothing to save.")
+            print("Error: No data to export. Please 'import' a file first.")
             return
-            
+
         if not filepath:
-            print("Error: Please provide a filename. Example: save output.csv")
+            print("Error: Please provide a destination filepath. Example: export output.csv")
             return
-            
+
         filepath = filepath.strip("\"'")
         ext = os.path.splitext(filepath)[1].lower()
-        
-        # Create a temporary copy so we don't mess up the datatypes in the active shell
+
+        print(f"Attempting to export data to '{filepath}'...")
+
         df_to_save = self.dataFile.copy()
         
-        # Force all datetime columns into strict ISO format strings before saving
-        for col in df_to_save.columns:
-            if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
-                df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        if ext in ['.csv', '.json', '.xml', '.html', '']:
+            for col in df_to_save.columns:
+                if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
+                    df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         
+        elif ext in ['.xls', '.xlsx']:
+            for col in df_to_save.columns:
+                if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
+                    if df_to_save[col].dt.tz is not None:
+                        df_to_save[col] = df_to_save[col].dt.tz_localize(None)
+
         try:
-            if ext == '.json':
-                df_to_save.to_json(filepath, orient='records')
-                print(f"Success: Data saved to JSON at '{filepath}'")
+            if ext == '.csv':
+                df_to_save.to_csv(filepath, index=False)
+            elif ext == '.json':
+                df_to_save.to_json(filepath, orient='records', indent=4)
             elif ext in ['.xls', '.xlsx']:
-                df_to_save.to_excel(filepath, index=False)
-                print(f"Success: Data saved to Excel at '{filepath}'")
+                if ext == '.xls':
+                    print("Notice: Legacy '.xls' format is deprecated. Auto-correcting to '.xlsx'...")
+                    filepath = filepath[:-4] + '.xlsx'
+                
+                df_to_save.to_excel(filepath, index=False, engine='openpyxl')
             elif ext == '.parquet':
-                df_to_save.to_parquet(filepath, index=False)
-                print(f"Success: Data saved to Parquet at '{filepath}'")
+                df_to_save.to_parquet(filepath)
             elif ext in ['.pkl', '.pickle']:
                 df_to_save.to_pickle(filepath)
-                print(f"Success: Data saved to Pickle at '{filepath}'")
+            elif ext == '.xml':
+                df_to_save.to_xml(filepath, index=False)
+            elif ext in ['.feather', '.ftr']:
+                df_to_save.to_feather(filepath)
+            elif ext in ['.h5', '.hdf5']:
+                df_to_save.to_hdf(filepath, key='data', mode='w')
+            elif ext in ['.html', '.htm']:
+                df_to_save.to_html(filepath, index=False)
             else:
-                df_to_save.to_csv(filepath, index=False)
-                print(f"Success: Data saved to CSV at '{filepath}'")
+                print(f"Unknown extension '{ext}'. Defaulting to CSV export.")
+                new_path = filepath + ".csv" if not ext else filepath.replace(ext, ".csv")
+                df_to_save.to_csv(new_path, index=False)
+                print(f"Saved as: {new_path}")
+                return
+
+            print(f"Success: Dataset exported to {ext.upper() if ext else 'CSV'} format.")
+
         except ImportError as ie:
-            print(f"Error: Missing a library required to save this format: {ie}")
+            print(f"\nMissing dependency to export to this format: {ie}")
+            print("Tip: Run 'pip install pyarrow fastparquet openpyxl lxml tables' to enable all exports.")
         except Exception as e:
-            print(f"Error saving file: {e}")
+            print(f"Failed to export file. Error: {e}")
 
-    def do_exit(self, arg):
-        """
-        Exit the interactive shell.
-        Usage: exit (or quit)
-        """
-        print("Closing the OctoTS shell. Goodbye!")
-        return True
-    
-    def emptyline(self):
-        """
-        Nadpisuje domyślne zachowanie modułu cmd, 
-        aby zapobiec powtarzaniu ostatniej komendy po wciśnięciu Enter.
-        """
-        pass
+    do_save = do_export
 
-    
     def do_setrole(self, arg):
         """
         Manually assign a role to a column. 
@@ -545,6 +567,21 @@ class OctoTS(cmd.Cmd):
             print(f"Notice: You marked this as Time, but it's not a datetime object.")
             print(f"Consider running: timecol {col_name}")
 
+    def emptyline(self):
+        """
+        Nadpisuje domyślne zachowanie modułu cmd, 
+        aby zapobiec powtarzaniu ostatniej komendy po wciśnięciu Enter.
+        """
+        pass
+
+    def do_exit(self, arg):
+        """
+        Exit the interactive shell.
+        Usage: exit (or quit)
+        """
+        print("Closing the OctoTS shell. Goodbye!")
+        return True
+
     do_quit = do_exit
     do_EOF = do_exit
 
@@ -556,4 +593,4 @@ if __name__ == '__main__':
             break  
         except KeyboardInterrupt:
             print("^C\n(Use the 'exit' or 'quit' command to close OctoTS)")
-            app.intro = '' 
+            app.intro = ''
