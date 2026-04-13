@@ -3,6 +3,8 @@ import os
 import pandas as pd
 import io 
 import re
+from urllib.parse import urlparse
+
 
 class OctoTS(cmd.Cmd):
     intro = 'Welcome to the OctoTS CLI. Type "help" or "?" to list commands.\n'
@@ -92,56 +94,65 @@ class OctoTS(cmd.Cmd):
 
     def do_import(self, filepath):
         """
-        Import a file containing time-series data.
+        Import a file containing time-series data from a local path or URL.
         Supported formats: CSV, JSON, Excel (.xlsx/.xls), Parquet, Pickle.
-        Usage: import <filepath>
+        Usage: import <filepath_or_url>
+        Example: import https://raw.githubusercontent.com/user/repo/main/data.csv
         """
         if not filepath:
-            print("Error: Please provide a file path. Example: import data.csv")
+            print("Error: Please provide a file path or URL. Example: import data.csv")
             return
         
         filepath = filepath.strip("\"'")
         
-        if not os.path.exists(filepath):
-            print(f"Error: File '{filepath}' not found.")
+        is_url = filepath.startswith('http://') or filepath.startswith('https://')
+        
+        if not is_url and not os.path.exists(filepath):
+            print(f"Error: File '{filepath}' not found on local disk.")
             return
 
-        print(f"Attempting to load '{filepath}'...")
-        ext = os.path.splitext(filepath)[1].lower()
+        source_type = "URL" if is_url else "file"
+        print(f"Attempting to load {source_type} '{filepath}'...")
+        
+        if is_url:
+            parsed_url = urlparse(filepath)
+            ext = os.path.splitext(parsed_url.path)[1].lower()
+        else:
+            ext = os.path.splitext(filepath)[1].lower()
         
         try:
             if ext == '.json':
                 self.dataFile = pd.read_json(filepath)
-                print("Success: Loaded as JSON.")
+                print(f"Success: Loaded JSON from {source_type}.")
             elif ext in ['.xls', '.xlsx']:
                 self.dataFile = pd.read_excel(filepath)
-                print(f"Success: Loaded as Excel ({ext}).")
+                print(f"Success: Loaded Excel ({ext}) from {source_type}.")
             elif ext == '.parquet':
                 self.dataFile = pd.read_parquet(filepath)
-                print("Success: Loaded as Parquet.")
+                print(f"Success: Loaded Parquet from {source_type}.")
             elif ext in ['.pkl', '.pickle']:
                 self.dataFile = pd.read_pickle(filepath)
-                print("Success: Loaded as Pickle.")
+                print(f"Success: Loaded Pickle from {source_type}.")
             else:
                 try:
                     self.dataFile = pd.read_csv(filepath, sep=None, engine='python')
-                    print(f"Success: Detected and loaded as delimited text/CSV.")
+                    print(f"Success: Detected and loaded as delimited text/CSV from {source_type}.")
                 except ValueError:
                     self.dataFile = pd.read_json(filepath)
-                    print("Success: Detected and loaded as JSON.")
+                    print(f"Success: Detected and loaded as JSON from {source_type}.")
             
             self.history = []
             self.custom_roles = {}
             
             self._auto_detect_timecol()
-            
             self.do_show('info')
+            self.do_show('roles')
                 
         except ImportError as ie:
             print(f"Missing dependency for this file type: {ie}")
             self.dataFile = None
         except Exception as e:
-            print(f"Failed to load file. Ensure it is a valid file. Error: {e}")
+            print(f"Failed to load {source_type}. Ensure the path/URL is correct and publicly accessible. Error: {e}")
             self.dataFile = None
 
     def do_show(self, arg):
@@ -214,22 +225,17 @@ class OctoTS(cmd.Cmd):
             value_cols = []
             
             for col in self.dataFile.columns:
-                # 0. SPRAWDZAMY RĘCZNE NADPISANIE
                 if col in self.custom_roles:
                     role = self.custom_roles[col]
                     display_name = f"{col} (manual override)"
                     if role == 'time': time_cols.append(display_name)
                     elif role == 'label': label_cols.append(display_name)
                     elif role == 'value': value_cols.append(display_name)
-                    continue # Pomijamy autodetect
                 
-                # 1. Czas (Autodetect)
                 if pd.api.types.is_datetime64_any_dtype(self.dataFile[col]):
                     time_cols.append(col)
-                # 2. Typowe Etykiety (tekst, bool, kategorie)
                 elif self.dataFile[col].dtype == 'object' or self.dataFile[col].dtype == 'bool' or self.dataFile[col].dtype.name == 'category':
                     label_cols.append(col)
-                # 3. Liczby (rozróżnienie na Float vs Int)
                 elif pd.api.types.is_numeric_dtype(self.dataFile[col]):
                     unique_count = self.dataFile[col].nunique()
                     
@@ -240,7 +246,7 @@ class OctoTS(cmd.Cmd):
                     else:
                         value_cols.append(col)
                 else:
-                    label_cols.append(col) # Fallback
+                    label_cols.append(col)
             
             print(f"\n🕒 Time/Index Columns ({len(time_cols)}):")
             for c in time_cols: print(f"  * {c}")
