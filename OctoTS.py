@@ -447,6 +447,13 @@ class OctoTS(cmd.Cmd):
         """
         print("Closing the OctoTS shell. Goodbye!")
         return True
+    
+    def emptyline(self):
+        """
+        Nadpisuje domyślne zachowanie modułu cmd, 
+        aby zapobiec powtarzaniu ostatniej komendy po wciśnięciu Enter.
+        """
+        pass
 
     do_quit = do_exit
     do_EOF = do_exit
