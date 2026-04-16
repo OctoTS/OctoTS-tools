@@ -4,7 +4,21 @@ import pandas as pd
 import io 
 import re
 from urllib.parse import urlparse
-
+import pyarrow.orc as orc
+import pyarrow as pa
+import xarray as xr
+import msgpack
+import datetime
+import yaml
+import importlib, sys
+import urllib.request
+import tempfile
+import urllib
+import cbor2
+from google.protobuf import descriptor as _descriptor
+from google.protobuf import message as _message
+import json
+from google.protobuf.internal.decoder import _DecodeVarint
 
 class OctoTS(cmd.Cmd):
     intro = 'Welcome to the OctoTS CLI. Type "help" or "?" to list commands.\n'
@@ -92,13 +106,9 @@ class OctoTS(cmd.Cmd):
             
         print("Scan complete.\n")
 
-    # -------------------------------------------------------------------------
-    # Internal helpers for lesser-known formats
-    # -------------------------------------------------------------------------
-
     def _read_jsonl(self, filepath):
         """Read JSON Lines / NDJSON format (one JSON object per line)."""
-        import json
+
         records = []
         with open(filepath, 'r', encoding='utf-8') as f:
             for line_num, line in enumerate(f, 1):
@@ -118,7 +128,7 @@ class OctoTS(cmd.Cmd):
     def _read_orc(self, filepath):
         """Read Apache ORC format."""
         try:
-            import pyarrow.orc as orc
+            
             table = orc.read_table(filepath)
             return table.to_pandas()
         except ImportError:
@@ -127,8 +137,6 @@ class OctoTS(cmd.Cmd):
     def _write_orc(self, df, filepath):
         """Write DataFrame to Apache ORC format."""
         try:
-            import pyarrow as pa
-            import pyarrow.orc as orc
             table = pa.Table.from_pandas(df)
             orc.write_table(table, filepath)
         except ImportError:
@@ -137,27 +145,27 @@ class OctoTS(cmd.Cmd):
     def _read_netcdf(self, filepath):
         """Read NetCDF format (popular in meteorology, oceanography, climatology)."""
         try:
-            import xarray as xr
+
+            
             ds = xr.open_dataset(filepath)
-            return ds.to_dataframe().reset_index()
+            
+            if not ds.dims:
+                record = {k: v.item() for k, v in ds.variables.items()}
+                return pd.DataFrame([record])
+            
+            try:
+                return ds.to_dataframe().reset_index()
+            except ValueError as e:
+                if "0-dimensional" in str(e).lower() or "no valid index" in str(e).lower():
+                    ds_dropped = ds.drop_vars([k for k, v in ds.variables.items() if v.ndim == 0])
+                    return ds_dropped.to_dataframe().reset_index()
+                raise e
+                
         except ImportError:
             raise ImportError("xarray and netCDF4 are required for NetCDF support. Run: pip install xarray netCDF4")
 
-    def _write_netcdf(self, df, filepath):
-        """Write DataFrame to NetCDF format."""
-        try:
-            import xarray as xr
-            ds = xr.Dataset.from_dataframe(df)
-            ds.to_netcdf(filepath)
-        except ImportError:
-            raise ImportError("xarray and netCDF4 are required for NetCDF export. Run: pip install xarray netCDF4")
-
     def _read_msgpack(self, filepath):
         """Read MessagePack binary format."""
-        try:
-            import msgpack
-        except ImportError:
-            raise ImportError("msgpack is required for MessagePack support. Run: pip install msgpack")
         with open(filepath, 'rb') as f:
             data = msgpack.unpack(f, raw=False)
         if isinstance(data, list):
@@ -169,12 +177,8 @@ class OctoTS(cmd.Cmd):
 
     def _write_msgpack(self, df, filepath):
         """Write DataFrame to MessagePack binary format."""
-        try:
-            import msgpack
-        except ImportError:
-            raise ImportError("msgpack is required for MessagePack export. Run: pip install msgpack")
         records = df.to_dict(orient='records')
-        import datetime
+        
         def _coerce(v):
             if isinstance(v, (pd.Timestamp, datetime.datetime, datetime.date)):
                 return str(v)
@@ -185,10 +189,6 @@ class OctoTS(cmd.Cmd):
 
     def _read_cbor(self, filepath):
         """Read CBOR (Concise Binary Object Representation) format — IETF RFC 8949."""
-        try:
-            import cbor2
-        except ImportError:
-            raise ImportError("cbor2 is required for CBOR support. Run: pip install cbor2")
         with open(filepath, 'rb') as f:
             data = cbor2.load(f)
         if isinstance(data, list):
@@ -200,11 +200,6 @@ class OctoTS(cmd.Cmd):
 
     def _write_cbor(self, df, filepath):
         """Write DataFrame to CBOR format."""
-        try:
-            import cbor2
-        except ImportError:
-            raise ImportError("cbor2 is required for CBOR export. Run: pip install cbor2")
-        import datetime
         records = df.to_dict(orient='records')
         def _coerce(v):
             if isinstance(v, pd.Timestamp):
@@ -221,7 +216,6 @@ class OctoTS(cmd.Cmd):
         pre-compiled _pb2.py module on PYTHONPATH.
         Falls back to raw byte inspection and raises a descriptive error.
         """
-        import importlib, sys
         stem = os.path.splitext(os.path.basename(filepath))[0]
         pb2_name = stem + '_pb2'
         parent_dir = os.path.dirname(os.path.abspath(filepath))
@@ -240,8 +234,7 @@ class OctoTS(cmd.Cmd):
                 "  4. Re-run the import command.\n"
                 "Tip: Run 'pip install protobuf grpcio-tools' to install the compiler."
             )
-        from google.protobuf import descriptor as _descriptor
-        from google.protobuf import message as _message
+
         msg_class = None
         for name in dir(pb2):
             obj = getattr(pb2, name)
@@ -256,7 +249,7 @@ class OctoTS(cmd.Cmd):
         records = []
         with open(filepath, 'rb') as f:
             data = f.read()
-        from google.protobuf.internal.decoder import _DecodeVarint
+        
         pos = 0
         while pos < len(data):
             try:
@@ -279,7 +272,7 @@ class OctoTS(cmd.Cmd):
         Like Protobuf, requires a pre-generated Python binding (*_generated.py).
         Raises a descriptive error when the binding is absent.
         """
-        import importlib, sys
+        
         stem = os.path.splitext(os.path.basename(filepath))[0]
         gen_name = stem + '_generated'
         parent_dir = os.path.dirname(os.path.abspath(filepath))
@@ -306,10 +299,6 @@ class OctoTS(cmd.Cmd):
 
     def _read_yaml(self, filepath):
         """Read YAML format."""
-        try:
-            import yaml
-        except ImportError:
-            raise ImportError("PyYAML is required for YAML support. Run: pip install PyYAML")
         
         with open(filepath, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
@@ -323,12 +312,7 @@ class OctoTS(cmd.Cmd):
 
     def _write_yaml(self, df, filepath):
         """Write DataFrame to YAML format."""
-        try:
-            import yaml
-        except ImportError:
-            raise ImportError("PyYAML is required for YAML export. Run: pip install PyYAML")
             
-        import datetime
         records = df.to_dict(orient='records')
         
         def _coerce(v):
@@ -344,6 +328,39 @@ class OctoTS(cmd.Cmd):
         
         with open(filepath, 'w', encoding='utf-8') as f:
             yaml.dump(records, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    def _write_netcdf(self, df, filepath):
+            """Write DataFrame to NetCDF format with smart dimension handling."""
+            try:
+
+                df_out = df.copy()
+
+
+                for col in df_out.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df_out[col]):
+                        if hasattr(df_out[col].dt, 'tz') and df_out[col].dt.tz is not None:
+                            df_out[col] = df_out[col].dt.tz_localize(None)
+
+
+                time_cols = [c for c in df_out.columns if pd.api.types.is_datetime64_any_dtype(df_out[c])]
+                
+                if time_cols:
+
+                    df_out.set_index(time_cols[0], inplace=True)
+                elif df_out.index.name is None:
+
+                    df_out.index.name = 'record'
+
+
+                for col in df_out.columns:
+                    if df_out[col].dtype == 'object':
+                        df_out[col] = df_out[col].astype(str)
+
+                ds = xr.Dataset.from_dataframe(df_out)
+                ds.to_netcdf(filepath)
+                
+            except ImportError:
+                raise ImportError("xarray and netCDF4 are required for NetCDF export.")
 
     def do_import(self, filepath):
         """
@@ -391,8 +408,7 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.yaml', '.yml']:
                 if is_url:
-                    import urllib.request
-                    import tempfile
+
                     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_yaml(tmp.name)
@@ -403,8 +419,6 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.jsonl', '.ndjson']:
                 if is_url:
-                    import urllib.request
-                    import tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_jsonl(tmp.name)
@@ -423,7 +437,6 @@ class OctoTS(cmd.Cmd):
 
             elif ext == '.orc':
                 if is_url:
-                    import urllib.request, tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.orc') as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_orc(tmp.name)
@@ -455,7 +468,6 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.nc', '.nc4', '.cdf']:
                 if is_url:
-                    import urllib.request, tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_netcdf(tmp.name)
@@ -466,7 +478,6 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.msgpack', '.mpack']:
                 if is_url:
-                    import urllib.request, tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_msgpack(tmp.name)
@@ -477,7 +488,6 @@ class OctoTS(cmd.Cmd):
 
             elif ext == '.cbor':
                 if is_url:
-                    import urllib.request, tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.cbor') as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_cbor(tmp.name)
@@ -488,7 +498,6 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.pb', '.proto']:
                 if is_url:
-                    import urllib.request, tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_protobuf(tmp.name)
@@ -499,7 +508,6 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.fbs', '.flatbuffers']:
                 if is_url:
-                    import urllib.request, tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                         urllib.request.urlretrieve(filepath, tmp.name)
                         self.dataFile = self._read_flatbuffers(tmp.name)
@@ -588,7 +596,6 @@ class OctoTS(cmd.Cmd):
             print(f"Rows: {len(self.dataFile)}")
             print(f"Columns: {len(self.dataFile.columns)}")
             print("\nMemory Usage:")
-            import io
             buffer = io.StringIO()
             self.dataFile.info(buf=buffer, memory_usage='deep', verbose=False)
             print(buffer.getvalue())
