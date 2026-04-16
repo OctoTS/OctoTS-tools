@@ -304,13 +304,53 @@ class OctoTS(cmd.Cmd):
             "using your generated binding and load the result with pandas."
         )
 
+    def _read_yaml(self, filepath):
+        """Read YAML format."""
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError("PyYAML is required for YAML support. Run: pip install PyYAML")
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+            
+        if isinstance(data, list):
+            return pd.DataFrame(data)
+        elif isinstance(data, dict):
+            return pd.DataFrame([data])
+        else:
+            raise ValueError("YAML file must contain a list of records or a single record dict.")
+
+    def _write_yaml(self, df, filepath):
+        """Write DataFrame to YAML format."""
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError("PyYAML is required for YAML export. Run: pip install PyYAML")
+            
+        import datetime
+        records = df.to_dict(orient='records')
+        
+        def _coerce(v):
+            if pd.isna(v):  
+                return None
+            if isinstance(v, pd.Timestamp):
+                return v.to_pydatetime()
+            if hasattr(v, 'item'):
+                return v.item()
+            return v
+            
+        records = [{k: _coerce(v) for k, v in row.items()} for row in records]
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            yaml.dump(records, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     def do_import(self, filepath):
         """
         Import a file containing time-series data from a local path or URL.
 
         Supported formats:
-          Text/Tabular : CSV, TSV, JSON, JSON Lines (JSONL/NDJSON), XML, HTML
+          Text/Tabular : CSV, TSV, JSON, JSON Lines (JSONL/NDJSON), XML, HTML, YAML
           Spreadsheet  : Excel (.xls, .xlsx)
           Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc/.nc4/.cdf)
           Serialized   : MessagePack (.msgpack/.mpack), CBOR (.cbor)
@@ -348,6 +388,18 @@ class OctoTS(cmd.Cmd):
             if ext == '.json':
                 self.dataFile = pd.read_json(filepath)
                 print(f"Success: Loaded JSON from {source_type}.")
+
+            elif ext in ['.yaml', '.yml']:
+                if is_url:
+                    import urllib.request
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_yaml(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_yaml(filepath)
+                print(f"Success: Loaded YAML from {source_type}.")
 
             elif ext in ['.jsonl', '.ndjson']:
                 if is_url:
@@ -472,7 +524,7 @@ class OctoTS(cmd.Cmd):
                 
         except ImportError as ie:
             print(f"\nMissing dependency to read this file type: {ie}")
-            print("Tip: Run 'pip install lxml pyarrow xarray netCDF4 msgpack cbor2 protobuf openpyxl tables html5lib' to enable all formats.")
+            print("Tip: Run 'pip install -r requirements.txt' to enable all formats.")
             self.dataFile = None
         except Exception as e:
             print(f"Failed to load {source_type}. Ensure the path/URL is correct and supported. Error: {e}")
@@ -760,9 +812,6 @@ class OctoTS(cmd.Cmd):
         else:
             print("Error: Unknown trim argument. Use 'help trim' to see available options.")
 
-    # -------------------------------------------------------------------------
-    # do_undo
-    # -------------------------------------------------------------------------
 
     def do_undo(self, arg):
         """
@@ -781,7 +830,7 @@ class OctoTS(cmd.Cmd):
         Export/Save the current dataset to a file.
 
         Supported formats:
-          Text/Tabular : CSV, TSV (.tsv), JSON, JSON Lines (.jsonl/.ndjson), XML, HTML
+          Text/Tabular : CSV, TSV (.tsv), JSON, JSON Lines (.jsonl/.ndjson), XML, HTML, YAML
           Spreadsheet  : Excel (.xlsx)
           Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc)
           Serialized   : MessagePack (.msgpack), CBOR (.cbor)
@@ -811,6 +860,10 @@ class OctoTS(cmd.Cmd):
             for col in df_to_save.columns:
                 if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
                     df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        elif ext in ['.yaml', '.yml']:
+                self._write_yaml(df_to_save, filepath)
+                print("Success: Dataset exported to YAML format.")
         
         elif ext in ['.xls', '.xlsx']:
             for col in df_to_save.columns:
@@ -890,7 +943,7 @@ class OctoTS(cmd.Cmd):
 
         except ImportError as ie:
             print(f"\nMissing dependency to export to this format: {ie}")
-            print("Tip: Run 'pip install pyarrow xarray netCDF4 msgpack cbor2 fastparquet openpyxl lxml tables' to enable all exports.")
+            print("Tip: Run 'pip install -r requirements.txt' to enable all formats.")
         except Exception as e:
             print(f"Failed to export file. Error: {e}")
 
