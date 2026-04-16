@@ -15,3 +15,10 @@ tables
 
 # Recommended secondary parser for reading complex HTML files/websites reliably
 html5lib
+
+xarray 
+netCDF4 
+msgpack 
+cbor2 
+protobuf
+PyYAML
