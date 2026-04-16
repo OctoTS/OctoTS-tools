@@ -92,12 +92,237 @@ class OctoTS(cmd.Cmd):
             
         print("Scan complete.\n")
 
+    # -------------------------------------------------------------------------
+    # Internal helpers for lesser-known formats
+    # -------------------------------------------------------------------------
+
+    def _read_jsonl(self, filepath):
+        """Read JSON Lines / NDJSON format (one JSON object per line)."""
+        import json
+        records = []
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as e:
+                    print(f"  Warning: Skipping malformed line {line_num}: {e}")
+        return pd.DataFrame(records)
+
+    def _write_jsonl(self, df, filepath):
+        """Write DataFrame to JSON Lines / NDJSON format."""
+        df.to_json(filepath, orient='records', lines=True)
+
+    def _read_orc(self, filepath):
+        """Read Apache ORC format."""
+        try:
+            import pyarrow.orc as orc
+            table = orc.read_table(filepath)
+            return table.to_pandas()
+        except ImportError:
+            raise ImportError("pyarrow is required for ORC support. Run: pip install pyarrow")
+
+    def _write_orc(self, df, filepath):
+        """Write DataFrame to Apache ORC format."""
+        try:
+            import pyarrow as pa
+            import pyarrow.orc as orc
+            table = pa.Table.from_pandas(df)
+            orc.write_table(table, filepath)
+        except ImportError:
+            raise ImportError("pyarrow is required for ORC export. Run: pip install pyarrow")
+
+    def _read_netcdf(self, filepath):
+        """Read NetCDF format (popular in meteorology, oceanography, climatology)."""
+        try:
+            import xarray as xr
+            ds = xr.open_dataset(filepath)
+            return ds.to_dataframe().reset_index()
+        except ImportError:
+            raise ImportError("xarray and netCDF4 are required for NetCDF support. Run: pip install xarray netCDF4")
+
+    def _write_netcdf(self, df, filepath):
+        """Write DataFrame to NetCDF format."""
+        try:
+            import xarray as xr
+            ds = xr.Dataset.from_dataframe(df)
+            ds.to_netcdf(filepath)
+        except ImportError:
+            raise ImportError("xarray and netCDF4 are required for NetCDF export. Run: pip install xarray netCDF4")
+
+    def _read_msgpack(self, filepath):
+        """Read MessagePack binary format."""
+        try:
+            import msgpack
+        except ImportError:
+            raise ImportError("msgpack is required for MessagePack support. Run: pip install msgpack")
+        with open(filepath, 'rb') as f:
+            data = msgpack.unpack(f, raw=False)
+        if isinstance(data, list):
+            return pd.DataFrame(data)
+        elif isinstance(data, dict):
+            return pd.DataFrame([data])
+        else:
+            raise ValueError("MessagePack file must contain a list of records or a single record dict.")
+
+    def _write_msgpack(self, df, filepath):
+        """Write DataFrame to MessagePack binary format."""
+        try:
+            import msgpack
+        except ImportError:
+            raise ImportError("msgpack is required for MessagePack export. Run: pip install msgpack")
+        records = df.to_dict(orient='records')
+        import datetime
+        def _coerce(v):
+            if isinstance(v, (pd.Timestamp, datetime.datetime, datetime.date)):
+                return str(v)
+            return v
+        records = [{k: _coerce(v) for k, v in row.items()} for row in records]
+        with open(filepath, 'wb') as f:
+            msgpack.pack(records, f, use_bin_type=True)
+
+    def _read_cbor(self, filepath):
+        """Read CBOR (Concise Binary Object Representation) format — IETF RFC 8949."""
+        try:
+            import cbor2
+        except ImportError:
+            raise ImportError("cbor2 is required for CBOR support. Run: pip install cbor2")
+        with open(filepath, 'rb') as f:
+            data = cbor2.load(f)
+        if isinstance(data, list):
+            return pd.DataFrame(data)
+        elif isinstance(data, dict):
+            return pd.DataFrame([data])
+        else:
+            raise ValueError("CBOR file must contain a list of records or a single record dict.")
+
+    def _write_cbor(self, df, filepath):
+        """Write DataFrame to CBOR format."""
+        try:
+            import cbor2
+        except ImportError:
+            raise ImportError("cbor2 is required for CBOR export. Run: pip install cbor2")
+        import datetime
+        records = df.to_dict(orient='records')
+        def _coerce(v):
+            if isinstance(v, pd.Timestamp):
+                return v.to_pydatetime()
+            return v
+        records = [{k: _coerce(v) for k, v in row.items()} for row in records]
+        with open(filepath, 'wb') as f:
+            cbor2.dump(records, f)
+
+    def _read_protobuf(self, filepath):
+        """
+        Read a Protobuf binary file.
+        Requires a companion .proto schema file with the same base name, OR a
+        pre-compiled _pb2.py module on PYTHONPATH.
+        Falls back to raw byte inspection and raises a descriptive error.
+        """
+        import importlib, sys
+        stem = os.path.splitext(os.path.basename(filepath))[0]
+        pb2_name = stem + '_pb2'
+        parent_dir = os.path.dirname(os.path.abspath(filepath))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        try:
+            pb2 = importlib.import_module(pb2_name)
+        except ModuleNotFoundError:
+            raise ImportError(
+                f"Could not find a compiled Protobuf module '{pb2_name}.py'.\n"
+                "Protobuf requires a pre-compiled _pb2 module generated from a .proto schema.\n"
+                "Steps:\n"
+                "  1. Ensure you have a .proto schema file.\n"
+                "  2. Run: protoc --python_out=. your_schema.proto\n"
+                "  3. Place the generated *_pb2.py file next to your .pb file.\n"
+                "  4. Re-run the import command.\n"
+                "Tip: Run 'pip install protobuf grpcio-tools' to install the compiler."
+            )
+        from google.protobuf import descriptor as _descriptor
+        from google.protobuf import message as _message
+        msg_class = None
+        for name in dir(pb2):
+            obj = getattr(pb2, name)
+            try:
+                if isinstance(obj, type) and issubclass(obj, _message.Message) and obj is not _message.Message:
+                    msg_class = obj
+                    break
+            except TypeError:
+                continue
+        if msg_class is None:
+            raise ValueError(f"No Protobuf Message class found in '{pb2_name}'.")
+        records = []
+        with open(filepath, 'rb') as f:
+            data = f.read()
+        from google.protobuf.internal.decoder import _DecodeVarint
+        pos = 0
+        while pos < len(data):
+            try:
+                msg_len, new_pos = _DecodeVarint(data, pos)
+                msg_buf = data[new_pos:new_pos + msg_len]
+                record = msg_class()
+                record.ParseFromString(msg_buf)
+                records.append({f.name: getattr(record, f.name) for f in record.DESCRIPTOR.fields})
+                pos = new_pos + msg_len
+            except Exception:
+                record = msg_class()
+                record.ParseFromString(data)
+                records = [{f.name: getattr(record, f.name) for f in record.DESCRIPTOR.fields}]
+                break
+        return pd.DataFrame(records)
+
+    def _read_flatbuffers(self, filepath):
+        """
+        Read a FlatBuffers binary file.
+        Like Protobuf, requires a pre-generated Python binding (*_generated.py).
+        Raises a descriptive error when the binding is absent.
+        """
+        import importlib, sys
+        stem = os.path.splitext(os.path.basename(filepath))[0]
+        gen_name = stem + '_generated'
+        parent_dir = os.path.dirname(os.path.abspath(filepath))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        try:
+            importlib.import_module(gen_name)
+        except ModuleNotFoundError:
+            raise ImportError(
+                f"Could not find a generated FlatBuffers binding '{gen_name}.py'.\n"
+                "FlatBuffers requires pre-generated Python code from a .fbs schema.\n"
+                "Steps:\n"
+                "  1. Write a .fbs schema for your data.\n"
+                "  2. Run: flatc --python your_schema.fbs\n"
+                "  3. Place the generated *_generated.py files next to your binary file.\n"
+                "  4. Re-run the import command.\n"
+                "Tip: Run 'pip install flatbuffers' and download flatc from https://github.com/google/flatbuffers/releases"
+            )
+        raise NotImplementedError(
+            "FlatBuffers bindings found, but generic DataFrame conversion requires\n"
+            "knowledge of your specific root table type. Please write a custom loader\n"
+            "using your generated binding and load the result with pandas."
+        )
+
+
     def do_import(self, filepath):
         """
         Import a file containing time-series data from a local path or URL.
-        Supported formats: CSV, TSV, JSON, Excel, Parquet, Pickle, XML, Feather, HTML, HDF5.
+
+        Supported formats:
+          Text/Tabular : CSV, TSV, JSON, JSON Lines (JSONL/NDJSON), XML, HTML
+          Spreadsheet  : Excel (.xls, .xlsx)
+          Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc/.nc4/.cdf)
+          Serialized   : MessagePack (.msgpack/.mpack), CBOR (.cbor)
+          Schema-based : Protobuf (.pb/.proto) *, FlatBuffers (.bin/.fbs) *
+                         (* requires pre-compiled Python bindings — see help)
+
         Usage: import <filepath_or_url>
-        Example: import https://raw.githubusercontent.com/user/repo/main/data.xml
+        Examples:
+          import data.csv
+          import data.jsonl
+          import data.nc
+          import https://raw.githubusercontent.com/user/repo/main/data.parquet
         """
         if not filepath:
             print("Error: Please provide a file path or URL. Example: import data.csv")
@@ -123,28 +348,114 @@ class OctoTS(cmd.Cmd):
             if ext == '.json':
                 self.dataFile = pd.read_json(filepath)
                 print(f"Success: Loaded JSON from {source_type}.")
+
+            elif ext in ['.jsonl', '.ndjson']:
+                if is_url:
+                    import urllib.request
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_jsonl(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_jsonl(filepath)
+                print(f"Success: Loaded JSON Lines (JSONL/NDJSON) from {source_type}.")
+
             elif ext in ['.xls', '.xlsx']:
                 self.dataFile = pd.read_excel(filepath)
                 print(f"Success: Loaded Excel ({ext}) from {source_type}.")
+
             elif ext == '.parquet':
                 self.dataFile = pd.read_parquet(filepath)
                 print(f"Success: Loaded Parquet from {source_type}.")
+
+            elif ext == '.orc':
+                if is_url:
+                    import urllib.request, tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.orc') as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_orc(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_orc(filepath)
+                print(f"Success: Loaded Apache ORC from {source_type}.")
+
             elif ext in ['.pkl', '.pickle']:
                 self.dataFile = pd.read_pickle(filepath)
                 print(f"Success: Loaded Pickle from {source_type}.")
+
             elif ext == '.xml':
                 self.dataFile = pd.read_xml(filepath)
                 print(f"Success: Loaded XML from {source_type}.")
+
             elif ext in ['.feather', '.ftr']:
                 self.dataFile = pd.read_feather(filepath)
                 print(f"Success: Loaded Feather from {source_type}.")
+
             elif ext in ['.h5', '.hdf5']:
                 self.dataFile = pd.read_hdf(filepath)
                 print(f"Success: Loaded HDF5 from {source_type}.")
+
             elif ext in ['.html', '.htm']:
                 dfs = pd.read_html(filepath)
                 self.dataFile = dfs[0] 
                 print(f"Success: Loaded HTML table (extracted table 1 of {len(dfs)}) from {source_type}.")
+
+            elif ext in ['.nc', '.nc4', '.cdf']:
+                if is_url:
+                    import urllib.request, tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_netcdf(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_netcdf(filepath)
+                print(f"Success: Loaded NetCDF from {source_type}.")
+
+            elif ext in ['.msgpack', '.mpack']:
+                if is_url:
+                    import urllib.request, tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_msgpack(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_msgpack(filepath)
+                print(f"Success: Loaded MessagePack from {source_type}.")
+
+            elif ext == '.cbor':
+                if is_url:
+                    import urllib.request, tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.cbor') as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_cbor(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_cbor(filepath)
+                print(f"Success: Loaded CBOR from {source_type}.")
+
+            elif ext in ['.pb', '.proto']:
+                if is_url:
+                    import urllib.request, tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_protobuf(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_protobuf(filepath)
+                print(f"Success: Loaded Protobuf from {source_type}.")
+
+            elif ext in ['.fbs', '.flatbuffers']:
+                if is_url:
+                    import urllib.request, tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                        urllib.request.urlretrieve(filepath, tmp.name)
+                        self.dataFile = self._read_flatbuffers(tmp.name)
+                    os.unlink(tmp.name)
+                else:
+                    self.dataFile = self._read_flatbuffers(filepath)
+                print(f"Success: Loaded FlatBuffers from {source_type}.")
+
             else:
                 try:
                     self.dataFile = pd.read_csv(filepath, sep=None, engine='python')
@@ -161,11 +472,12 @@ class OctoTS(cmd.Cmd):
                 
         except ImportError as ie:
             print(f"\nMissing dependency to read this file type: {ie}")
-            print("Tip: Run 'pip install lxml pyarrow tables html5lib openpyxl' to enable all formats.")
+            print("Tip: Run 'pip install lxml pyarrow xarray netCDF4 msgpack cbor2 protobuf openpyxl tables html5lib' to enable all formats.")
             self.dataFile = None
         except Exception as e:
             print(f"Failed to load {source_type}. Ensure the path/URL is correct and supported. Error: {e}")
             self.dataFile = None
+
 
     def do_show(self, arg):
         """
@@ -448,6 +760,10 @@ class OctoTS(cmd.Cmd):
         else:
             print("Error: Unknown trim argument. Use 'help trim' to see available options.")
 
+    # -------------------------------------------------------------------------
+    # do_undo
+    # -------------------------------------------------------------------------
+
     def do_undo(self, arg):
         """
         Undo the last modification (trim, sort, timecol).
@@ -463,9 +779,18 @@ class OctoTS(cmd.Cmd):
     def do_export(self, filepath):
         """
         Export/Save the current dataset to a file.
-        Supported formats: CSV, JSON, Excel, Parquet, Pickle, XML, Feather, HTML, HDF5.
-        Usage: export <filepath> (or save <filepath>)
-        Example: export processed_data.parquet
+
+        Supported formats:
+          Text/Tabular : CSV, TSV (.tsv), JSON, JSON Lines (.jsonl/.ndjson), XML, HTML
+          Spreadsheet  : Excel (.xlsx)
+          Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc)
+          Serialized   : MessagePack (.msgpack), CBOR (.cbor)
+
+        Usage: export <filepath>  (alias: save <filepath>)
+        Examples:
+          export processed_data.parquet
+          export output.jsonl
+          export results.msgpack
         """
         if self.dataFile is None:
             print("Error: No data to export. Please 'import' a file first.")
@@ -482,7 +807,7 @@ class OctoTS(cmd.Cmd):
 
         df_to_save = self.dataFile.copy()
         
-        if ext in ['.csv', '.json', '.xml', '.html', '']:
+        if ext in ['.csv', '.tsv', '.json', '.jsonl', '.ndjson', '.xml', '.html', '.htm', '']:
             for col in df_to_save.columns:
                 if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
                     df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -496,38 +821,76 @@ class OctoTS(cmd.Cmd):
         try:
             if ext == '.csv':
                 df_to_save.to_csv(filepath, index=False)
+                print("Success: Dataset exported to CSV format.")
+
+            elif ext == '.tsv':
+                df_to_save.to_csv(filepath, index=False, sep='\t')
+                print("Success: Dataset exported to TSV format.")
+
             elif ext == '.json':
                 df_to_save.to_json(filepath, orient='records', indent=4)
+                print("Success: Dataset exported to JSON format.")
+
+            elif ext in ['.jsonl', '.ndjson']:
+                self._write_jsonl(df_to_save, filepath)
+                print("Success: Dataset exported to JSON Lines (JSONL/NDJSON) format.")
+
             elif ext in ['.xls', '.xlsx']:
                 if ext == '.xls':
                     print("Notice: Legacy '.xls' format is deprecated. Auto-correcting to '.xlsx'...")
                     filepath = filepath[:-4] + '.xlsx'
-                
                 df_to_save.to_excel(filepath, index=False, engine='openpyxl')
+                print("Success: Dataset exported to Excel (.xlsx) format.")
+
             elif ext == '.parquet':
                 df_to_save.to_parquet(filepath)
+                print("Success: Dataset exported to Parquet format.")
+
+            elif ext == '.orc':
+                self._write_orc(df_to_save, filepath)
+                print("Success: Dataset exported to Apache ORC format.")
+
             elif ext in ['.pkl', '.pickle']:
                 df_to_save.to_pickle(filepath)
+                print("Success: Dataset exported to Pickle format.")
+
             elif ext == '.xml':
                 df_to_save.to_xml(filepath, index=False)
+                print("Success: Dataset exported to XML format.")
+
             elif ext in ['.feather', '.ftr']:
                 df_to_save.to_feather(filepath)
+                print("Success: Dataset exported to Feather format.")
+
             elif ext in ['.h5', '.hdf5']:
                 df_to_save.to_hdf(filepath, key='data', mode='w')
+                print("Success: Dataset exported to HDF5 format.")
+
             elif ext in ['.html', '.htm']:
                 df_to_save.to_html(filepath, index=False)
+                print("Success: Dataset exported to HTML format.")
+
+            elif ext in ['.nc', '.nc4', '.cdf']:
+                self._write_netcdf(df_to_save, filepath)
+                print("Success: Dataset exported to NetCDF format.")
+
+            elif ext in ['.msgpack', '.mpack']:
+                self._write_msgpack(df_to_save, filepath)
+                print("Success: Dataset exported to MessagePack format.")
+
+            elif ext == '.cbor':
+                self._write_cbor(df_to_save, filepath)
+                print("Success: Dataset exported to CBOR format.")
+
             else:
                 print(f"Unknown extension '{ext}'. Defaulting to CSV export.")
                 new_path = filepath + ".csv" if not ext else filepath.replace(ext, ".csv")
                 df_to_save.to_csv(new_path, index=False)
                 print(f"Saved as: {new_path}")
-                return
-
-            print(f"Success: Dataset exported to {ext.upper() if ext else 'CSV'} format.")
 
         except ImportError as ie:
             print(f"\nMissing dependency to export to this format: {ie}")
-            print("Tip: Run 'pip install pyarrow fastparquet openpyxl lxml tables' to enable all exports.")
+            print("Tip: Run 'pip install pyarrow xarray netCDF4 msgpack cbor2 fastparquet openpyxl lxml tables' to enable all exports.")
         except Exception as e:
             print(f"Failed to export file. Error: {e}")
 
