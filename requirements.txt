@@ -22,3 +22,19 @@ msgpack
 cbor2 
 protobuf
 PyYAML
+
+
+# Modern library for building professional CLI applications with automated help
+typer
+
+# Library for beautiful terminal formatting and colorful help menus
+rich
+
+# Essential for rendering and formatting data as Markdown tables
+tabulate
+
+# Template engine required for LaTeX and styled HTML generation
+Jinja2
+
+# SQL toolkit required for SQLite database persistence
+sqlalchemy

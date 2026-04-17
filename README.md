@@ -15,27 +15,28 @@ Use this file to generate sample data about your Github repository (author of co
 
 `python3 generateSampleData.py <dir> [flags]`
 
-# OctoTS Batch ⚙️
 
-The **OctoTS Batch Processor** (`batchProcessor.py`) is the non-interactive version of the engine, specifically designed for automated environments and CI/CD pipelines (like GitHub Actions). It handles the heavy lifting of data ingestion without requiring user input.
+## Prerequisites & Installation
 
-## Batch Features
-*   **Automated Ingestion:** Perfect for cron jobs; it processes data from start to finish and exits automatically.
-*   **Pipe Support (stdin):** Seamlessly integrates with other tools. You can pipe raw generator output directly into the processor.
-*   **Instant Timestamping:** Automatically injects a strict ISO 8601 UTC timestamp as the **first column** of every new record.
-*   **Format Bridging:** Supports reading from one format (e.g., CSV) and appending to another (e.g., Parquet) in a single command.
-
-## Requirements
-
-Ensure you have Python 3 installed. You can install all necessary dependencies for **both the Batch Processor and OctoTS** using the provided requirements file:
+Ensure you have Python 3.10+ installed. To support all 15+ storage engines, install the full dependency stack:
 
 ```bash
 pip install -r requirements.txt
 ```
-*(Note: Ensure your requirements.txt contains pandas, and optionally openpyxl for Excel support and pyarrow for Parquet support).*
+
+---
+
+# OctoTS Batch ⚙️
+
+The Batch Processor is a high-performance, non-interactive CLI tool built with Typer and Pandas.
+
+### Key Features
+* **Sub-command Architecture**: Uses a professional append/convert structure.
+* **Temporal Normalization**: Ensures every record has a strict ISO 8601 UTC timestamp at Index 0.
+* **Multi-Engine Persistence**: Supports 15 formats with optimized Append or Read-Modify-Write strategies.
 
 ### Input Requirements
-For the **Batch Processor** to work correctly with the Pandas engine, your input (whether it's a file or `stdin`) **must include a header row** with column names. 
+For the **Batch Processor** to work correctly with the Pandas engine, your input (whether it's a file or `stdin`) **must include a header row** with column names.
 
 **Example of valid input:**
 ```csv
@@ -44,32 +45,28 @@ John Doe,125
 Jane Smith,42
 ```
 
-*(Note: If the header is missing, the first row of your data will be incorrectly treated as column names, resulting in data loss).*
+### 1. Data Ingestion (Append)
+`python3 batchProcessor.py append <engine> <input_path|stdin> <output_path>`
 
-## Batch Command Reference
+### 2. Format Migration (Convert)
+`python3 batchProcessor.py convert <target_engine> <input_path> <output_path>`
 
-Run the script using positional arguments:
-`python3 batchProcessor.py append <output_type> <input_path|stdin> <output_path>`
+### Supported Storage Engines
+| Category | Formats |
+| :--- | :--- |
+| Time Series | CSV, TSV, JSONL |
+| Big Data | Parquet, Feather, HDF5, Pickle |
+| Reports | Excel, HTML, XML, MD, LaTeX |
+| Databases | SQL (SQLite) |
 
-#### Examples:
+### Data Integrity & Safety
+- **Self-Append Guard**: Prevents a file from appending to itself.
+- **Extension Enforcement**: Validates that engine matches file extension.
+- **Fail-Fast Recovery**: Aborts on corrupted database to prevent data loss.
+- **Empty Payload Protection**: Skips write cycle if input is empty.
 
-**1. Basic CSV Append**
-Appends new local data to a CSV database:
-```bash
-python3 batchProcessor.py append csv new_data.csv database.csv
-```
+---
 
-**2. Pipeline Mode (CI/CD Ready)**
-Receives data from another script and saves it to a Parquet store:
-```bash
-python3 data_generator.py | python3 batchProcessor.py append parquet stdin database.parquet
-```
-
-**3. JSON to Excel Conversion**
-Takes a JSON file, adds timestamps, and merges it into an Excel report:
-```bash
-python3 batchProcessor.py append excel updates.json report.xlsx
-```
 
 # OctoTS 🐙
 
