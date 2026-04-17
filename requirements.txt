@@ -1,23 +1,34 @@
-# Core library for data manipulation and time-series analysis
-pandas
+# Core library for data manipulation and time-series analysis 
+pandas 
 
-# Required engine for reading and writing Excel files (.xlsx)
-openpyxl
+# Required engine for reading and writing Excel files (.xlsx) 
+openpyxl 
 
-# Required engine for reading and writing Parquet and Feather files
-pyarrow
+# Required engine for reading and writing Parquet and Feather files 
+pyarrow 
+
+# Required engine for reading and writing XML files, as well as fast HTML table parsing
+lxml 
+
+# Required engine for reading and writing HDF5 files (.h5, .hdf5)
+tables 
+
+# Recommended secondary parser for reading complex HTML files/websites reliably
+html5lib
+
+xarray 
+netCDF4 
+msgpack 
+cbor2 
+protobuf
+PyYAML
+
 
 # Modern library for building professional CLI applications with automated help
 typer
 
 # Library for beautiful terminal formatting and colorful help menus
 rich
-
-# Required for HDF5 (Big Data) storage format support
-tables
-
-# High-performance parser for XML and HTML data exports
-lxml
 
 # Essential for rendering and formatting data as Markdown tables
 tabulate
