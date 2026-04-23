@@ -1,0 +1,33 @@
+name: Build Docker Image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/*
+    #branches: [main]
+    #paths:
+    #  - batchProcessor.py
+    #  - requirements.txt
+    #  - entrypoint.sh
+    #  - Dockerfile
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build image
+        run: docker build -t ghcr.io/octots/octots-action:latest .
+
+      - name: Push image
+        run: docker push ghcr.io/octots/octots-action:latest
