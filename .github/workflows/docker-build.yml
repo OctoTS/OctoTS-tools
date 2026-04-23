@@ -3,14 +3,12 @@ name: Build Docker Image
 on:
   workflow_dispatch:
   push:
-    branches:
-      - feat/*
-    #branches: [main]
-    #paths:
-    #  - batchProcessor.py
-    #  - requirements.txt
-    #  - entrypoint.sh
-    #  - Dockerfile
+    branches: [main]
+    paths:
+      - batchProcessor.py
+      - requirements.txt
+      - entrypoint.sh
+      - Dockerfile
 
 jobs:
   build:
