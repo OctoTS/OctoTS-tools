@@ -11,9 +11,14 @@ app = typer.Typer(
     no_args_is_help=True
 )
 console = Console()
-HDF5_DEFAULT_KEY = 'metrics'
+HDF5_DEFAULT_KEY = 'data'
 LARGE_FILE_THRESHOLD_MB = 500  # Warning threshold: noticeable lag on typical machines
 CRITICAL_FILE_THRESHOLD_MB = 1500  # Critical threshold: high OOM risk on 8-16GB machines
+
+def get_hdf5_keys(path: str) -> list[str]:
+    """Get all available keys in a pandas-compatible HDF5 file."""
+    with pd.HDFStore(path, mode='r') as store:
+        return list(store.keys())
 
 
 def validate_storage_extension(path: str, storage_type: str):
@@ -68,7 +73,17 @@ def load_input(source: str):
     elif ext in ['.feather', '.ftr']:
         return pd.read_feather(source)
     elif ext in ['.h5', '.hdf5']:
-        return pd.read_hdf(source, key=HDF5_DEFAULT_KEY)
+        try:
+            return pd.read_hdf(source, key=HDF5_DEFAULT_KEY)
+        except KeyError:
+            available_keys = get_hdf5_keys(source)
+            if available_keys:
+                alt_key = available_keys[0].lstrip('/')
+                console.print(f"[yellow]WARNING:[/yellow] Key '{HDF5_DEFAULT_KEY}' not found in HDF5 file. "
+                             f"Available keys: {available_keys}. Using first available: '{alt_key}'")
+                return pd.read_hdf(source, key=alt_key)
+            else:
+                raise ValueError(f"No datasets found in HDF5 file: {source}")
     elif ext == '.xml':
         return pd.read_xml(source)
     elif ext == '.tsv':

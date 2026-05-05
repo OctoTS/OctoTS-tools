@@ -19,6 +19,25 @@ from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 import json
 from google.protobuf.internal.decoder import _DecodeVarint
+from contextlib import contextmanager
+
+def get_hdf5_keys(path: str) -> list[str]:
+    """Get all available keys in a pandas-compatible HDF5 file."""
+    with pd.HDFStore(path, mode='r') as store:
+        return list(store.keys())
+
+@contextmanager
+def _download_temp(url: str, suffix: str):
+    """Download a URL to a temporary file and always clean it up afterward."""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+        urllib.request.urlretrieve(url, tmp_path)
+        yield tmp_path
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 class OctoTS(cmd.Cmd):
     intro = 'Welcome to the OctoTS CLI. Type "help" or "?" to list commands.\n'
@@ -145,7 +164,6 @@ class OctoTS(cmd.Cmd):
     def _read_netcdf(self, filepath):
         """Read NetCDF format (popular in meteorology, oceanography, climatology)."""
         try:
-
             
             ds = xr.open_dataset(filepath)
             
@@ -330,37 +348,35 @@ class OctoTS(cmd.Cmd):
             yaml.dump(records, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
     def _write_netcdf(self, df, filepath):
-            """Write DataFrame to NetCDF format with smart dimension handling."""
-            try:
+        """Write DataFrame to NetCDF format with smart dimension handling."""
+        try:
 
-                df_out = df.copy()
+            df_out = df.copy()
 
+            for col in df_out.columns:
+                if pd.api.types.is_datetime64_any_dtype(df_out[col]):
+                    if hasattr(df_out[col].dt, 'tz') and df_out[col].dt.tz is not None:
+                        df_out[col] = df_out[col].dt.tz_localize(None)
 
-                for col in df_out.columns:
-                    if pd.api.types.is_datetime64_any_dtype(df_out[col]):
-                        if hasattr(df_out[col].dt, 'tz') and df_out[col].dt.tz is not None:
-                            df_out[col] = df_out[col].dt.tz_localize(None)
+            time_cols = [c for c in df_out.columns if pd.api.types.is_datetime64_any_dtype(df_out[c])]
+            
+            if time_cols:
 
+                df_out.set_index(time_cols[0], inplace=True)
+            elif df_out.index.name is None:
 
-                time_cols = [c for c in df_out.columns if pd.api.types.is_datetime64_any_dtype(df_out[c])]
-                
-                if time_cols:
-
-                    df_out.set_index(time_cols[0], inplace=True)
-                elif df_out.index.name is None:
-
-                    df_out.index.name = 'record'
+                df_out.index.name = 'record'
 
 
-                for col in df_out.columns:
-                    if df_out[col].dtype == 'object':
-                        df_out[col] = df_out[col].astype(str)
+            for col in df_out.columns:
+                if df_out[col].dtype == 'object':
+                    df_out[col] = df_out[col].astype(str)
 
-                ds = xr.Dataset.from_dataframe(df_out)
-                ds.to_netcdf(filepath)
-                
-            except ImportError:
-                raise ImportError("xarray and netCDF4 are required for NetCDF export.")
+            ds = xr.Dataset.from_dataframe(df_out)
+            ds.to_netcdf(filepath)
+            
+        except ImportError:
+            raise ImportError("xarray and netCDF4 are required for NetCDF export.")
 
     def do_import(self, filepath):
         """
@@ -408,21 +424,16 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.yaml', '.yml']:
                 if is_url:
-
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_yaml(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix=ext) as tmp_path:
+                        self.dataFile = self._read_yaml(tmp_path)
                 else:
                     self.dataFile = self._read_yaml(filepath)
                 print(f"Success: Loaded YAML from {source_type}.")
 
             elif ext in ['.jsonl', '.ndjson']:
                 if is_url:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_jsonl(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix=ext) as tmp_path:
+                        self.dataFile = self._read_jsonl(tmp_path)
                 else:
                     self.dataFile = self._read_jsonl(filepath)
                 print(f"Success: Loaded JSON Lines (JSONL/NDJSON) from {source_type}.")
@@ -437,10 +448,8 @@ class OctoTS(cmd.Cmd):
 
             elif ext == '.orc':
                 if is_url:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.orc') as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_orc(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix='.orc') as tmp_path:
+                        self.dataFile = self._read_orc(tmp_path)
                 else:
                     self.dataFile = self._read_orc(filepath)
                 print(f"Success: Loaded Apache ORC from {source_type}.")
@@ -458,7 +467,16 @@ class OctoTS(cmd.Cmd):
                 print(f"Success: Loaded Feather from {source_type}.")
 
             elif ext in ['.h5', '.hdf5']:
-                self.dataFile = pd.read_hdf(filepath)
+                try:
+                    self.dataFile = pd.read_hdf(filepath, key='data')
+                except KeyError:
+                    available_keys = get_hdf5_keys(filepath)
+                    if available_keys:
+                        alt_key = available_keys[0].lstrip('/')
+                        print(f"Warning: Key 'data' not found in HDF5 file. Available keys: {available_keys}. Using '{alt_key}'")
+                        self.dataFile = pd.read_hdf(filepath, key=alt_key)
+                    else:
+                        raise ValueError(f"No datasets found in HDF5 file: {filepath}")
                 print(f"Success: Loaded HDF5 from {source_type}.")
 
             elif ext in ['.html', '.htm']:
@@ -468,50 +486,40 @@ class OctoTS(cmd.Cmd):
 
             elif ext in ['.nc', '.nc4', '.cdf']:
                 if is_url:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_netcdf(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix=ext) as tmp_path:
+                        self.dataFile = self._read_netcdf(tmp_path)
                 else:
                     self.dataFile = self._read_netcdf(filepath)
                 print(f"Success: Loaded NetCDF from {source_type}.")
 
             elif ext in ['.msgpack', '.mpack']:
                 if is_url:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_msgpack(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix=ext) as tmp_path:
+                        self.dataFile = self._read_msgpack(tmp_path)
                 else:
                     self.dataFile = self._read_msgpack(filepath)
                 print(f"Success: Loaded MessagePack from {source_type}.")
 
             elif ext == '.cbor':
                 if is_url:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.cbor') as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_cbor(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix='.cbor') as tmp_path:
+                        self.dataFile = self._read_cbor(tmp_path)
                 else:
                     self.dataFile = self._read_cbor(filepath)
                 print(f"Success: Loaded CBOR from {source_type}.")
 
             elif ext in ['.pb', '.proto']:
                 if is_url:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_protobuf(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix=ext) as tmp_path:
+                        self.dataFile = self._read_protobuf(tmp_path)
                 else:
                     self.dataFile = self._read_protobuf(filepath)
                 print(f"Success: Loaded Protobuf from {source_type}.")
 
             elif ext in ['.fbs', '.flatbuffers']:
                 if is_url:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                        urllib.request.urlretrieve(filepath, tmp.name)
-                        self.dataFile = self._read_flatbuffers(tmp.name)
-                    os.unlink(tmp.name)
+                    with _download_temp(filepath, suffix=ext) as tmp_path:
+                        self.dataFile = self._read_flatbuffers(tmp_path)
                 else:
                     self.dataFile = self._read_flatbuffers(filepath)
                 print(f"Success: Loaded FlatBuffers from {source_type}.")
@@ -868,9 +876,6 @@ class OctoTS(cmd.Cmd):
                 if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
                     df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         
-        elif ext in ['.yaml', '.yml']:
-                self._write_yaml(df_to_save, filepath)
-                print("Success: Dataset exported to YAML format.")
         
         elif ext in ['.xls', '.xlsx']:
             for col in df_to_save.columns:
@@ -894,6 +899,10 @@ class OctoTS(cmd.Cmd):
             elif ext in ['.jsonl', '.ndjson']:
                 self._write_jsonl(df_to_save, filepath)
                 print("Success: Dataset exported to JSON Lines (JSONL/NDJSON) format.")
+
+            elif ext in ['.yaml', '.yml']:
+                self._write_yaml(df_to_save, filepath)
+                print("Success: Dataset exported to YAML format.")
 
             elif ext in ['.xls', '.xlsx']:
                 if ext == '.xls':
@@ -992,8 +1001,8 @@ class OctoTS(cmd.Cmd):
 
     def emptyline(self):
         """
-        Nadpisuje domyślne zachowanie modułu cmd, 
-        aby zapobiec powtarzaniu ostatniej komendy po wciśnięciu Enter.
+        Overrides the default behavior of the cmd module
+        to prevent repeating the last command when Enter is pressed.
         """
         pass
 
