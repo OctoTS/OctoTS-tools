@@ -3,14 +3,17 @@ import sys
 import os
 import pandas as pd
 from datetime import datetime, timezone
-from typing import Optional
 from rich.console import Console
+import sqlite3
 
 app = typer.Typer(
     help="OctoTS Batch Processor",
     no_args_is_help=True
 )
 console = Console()
+HDF5_DEFAULT_KEY = 'metrics'
+LARGE_FILE_THRESHOLD_MB = 500  # Warning threshold: noticeable lag on typical machines
+CRITICAL_FILE_THRESHOLD_MB = 1500  # Critical threshold: high OOM risk on 8-16GB machines
 
 
 def validate_storage_extension(path: str, storage_type: str):
@@ -22,6 +25,7 @@ def validate_storage_extension(path: str, storage_type: str):
         'json': ['.json'],
         'jsonl': ['.jsonl', '.ndjson'],
         'excel': ['.xlsx', '.xls'],
+        'xlsx': ['.xlsx', '.xls'],
         'parquet': ['.parquet'],
         'feather': ['.feather', '.ftr'],
         'hdf5': ['.h5', '.hdf5'],
@@ -64,11 +68,16 @@ def load_input(source: str):
     elif ext in ['.feather', '.ftr']:
         return pd.read_feather(source)
     elif ext in ['.h5', '.hdf5']:
-        return pd.read_hdf(source, key='metrics')
+        return pd.read_hdf(source, key=HDF5_DEFAULT_KEY)
     elif ext == '.xml':
         return pd.read_xml(source)
     elif ext == '.tsv':
         return pd.read_csv(source, sep='\t')
+    elif ext in ['.sql', '.db', '.sqlite']:
+        conn = sqlite3.connect(source)
+        df = pd.read_sql('SELECT * FROM metrics', conn)
+        conn.close()
+        return df
     else:
         return pd.read_csv(source)
 
@@ -97,17 +106,29 @@ def save_output(df: pd.DataFrame, path: str, storage_type: str):
     """Persistence layer using direct append or Read-Modify-Write logic."""
     file_exists = os.path.isfile(path)
 
+    read_modify_write_formats = {'json', 'parquet', 'excel', 'xlsx', 'xml', 'feather', 'hdf5', 'pickle', 'html', 'md', 'latex', 'sql'}
+    if file_exists and storage_type in read_modify_write_formats:
+        file_size_mb = os.path.getsize(path) / (1024 * 1024)
+        if file_size_mb > CRITICAL_FILE_THRESHOLD_MB:
+            console.print(f"[bold red]CRITICAL:[/bold red] File {storage_type.upper()} ({file_size_mb:.1f} MB) is extremely large. "
+                         f"Read-Modify-Write will likely cause Out-Of-Memory (OOM) errors. "
+                         f"STRONGLY recommend using CSV/TSV/JSONL or a database backend instead.")
+        elif file_size_mb > LARGE_FILE_THRESHOLD_MB:
+            console.print(f"[yellow]WARNING:[/yellow] Appending to large {storage_type.upper()} file ({file_size_mb:.1f} MB). "
+                         f"Read-Modify-Write is expensive for big datasets. Consider using CSV/TSV/JSONL for better performance.")
+
     # Native append for text-based time series
-    if storage_type == 'csv':
-        df.to_csv(path, mode='a', index=False, header=not file_exists)
-        return
-    if storage_type == 'tsv':
-        df.to_csv(path, mode='a', index=False, sep='\t', header=not file_exists)
-        return
-    if storage_type == 'jsonl':
-        # Ensure file ends with newline before appending new JSON objects
+    if storage_type in ['csv', 'tsv', 'jsonl']:
+        if file_exists and open(path, 'rb').read()[-1] != ord(b'\n'):
+            with open(path, 'ab') as f:
+                f.write(b'\n')
+        if storage_type == 'csv':
+            df.to_csv(path, mode='a', index=False, header=not file_exists)
+            return
+        if storage_type == 'tsv':
+            df.to_csv(path, mode='a', index=False, sep='\t', header=not file_exists)
+            return
         if storage_type == 'jsonl':
-            # Simple append for JSON Lines
             df.to_json(path, mode='a', orient='records', lines=True)
             return
 
@@ -118,7 +139,7 @@ def save_output(df: pd.DataFrame, path: str, storage_type: str):
             df = pd.concat([existing_df, df], ignore_index=True)
         except Exception as e:
             console.print(f"[bold red]CRITICAL ERROR:[/bold red] Database corrupted: {e}")
-            sys.exit(1)
+            raise typer.Exit(code=1)
 
     if storage_type == 'json':
         df.to_json(path, orient='records', indent=4)
@@ -131,7 +152,7 @@ def save_output(df: pd.DataFrame, path: str, storage_type: str):
     elif storage_type == 'feather':
         df.to_feather(path)
     elif storage_type == 'hdf5':
-        df.to_hdf(path, key='metrics', mode='w')
+        df.to_hdf(path, key=HDF5_DEFAULT_KEY, mode='w')
     elif storage_type == 'pickle':
         df.to_pickle(path)
     elif storage_type == 'html':
@@ -141,8 +162,6 @@ def save_output(df: pd.DataFrame, path: str, storage_type: str):
     elif storage_type == 'latex':
         df.to_latex(path, index=False)
     elif storage_type == 'sql':
-        # Uses SQLite as a local file-based SQL database
-        import sqlite3
         conn = sqlite3.connect(path)
         df.to_sql('metrics', conn, if_exists='replace', index=False)
         conn.close()
