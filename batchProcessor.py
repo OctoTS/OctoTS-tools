@@ -3,6 +3,7 @@ import sys
 import os
 import pandas as pd
 from datetime import datetime, timezone
+from typing import Callable
 from rich.console import Console
 import sqlite3
 
@@ -21,27 +22,131 @@ def get_hdf5_keys(path: str) -> list[str]:
         return list(store.keys())
 
 
+def _read_hdf5(path: str) -> pd.DataFrame:
+    try:
+        return pd.read_hdf(path, key=HDF5_DEFAULT_KEY)
+    except KeyError:
+        available_keys = get_hdf5_keys(path)
+        if available_keys:
+            alt_key = available_keys[0].lstrip('/')
+            console.print(f"[yellow]WARNING:[/yellow] Key '{HDF5_DEFAULT_KEY}' not found in HDF5 file. "
+                         f"Available keys: {available_keys}. Using first available: '{alt_key}'")
+            return pd.read_hdf(path, key=alt_key)
+        raise ValueError(f"No datasets found in HDF5 file: {path}")
+
+
+def _read_pickle(path: str) -> pd.DataFrame:
+    console.print("[yellow]WARNING:[/yellow] Loading pickle files executes arbitrary code. Only load trusted sources.")
+    return pd.read_pickle(path)
+
+
+def _read_sql(path: str) -> pd.DataFrame:
+    conn = sqlite3.connect(path)
+    df = pd.read_sql('SELECT * FROM metrics', conn)
+    conn.close()
+    return df
+
+
+def _write_sql(df: pd.DataFrame, path: str, file_exists: bool):
+    conn = sqlite3.connect(path)
+    df.to_sql('metrics', conn, if_exists='replace', index=False)
+    conn.close()
+
+
+STORAGE_FORMATS = {
+    'csv': {
+        'extensions': ['.csv', '.txt'],
+        'reader': lambda path: pd.read_csv(path),
+        'writer': lambda df, path, file_exists: df.to_csv(path, mode='a', index=False, header=not file_exists),
+    },
+    'tsv': {
+        'extensions': ['.tsv'],
+        'reader': lambda path: pd.read_csv(path, sep='\t'),
+        'writer': lambda df, path, file_exists: df.to_csv(path, mode='a', index=False, sep='\t', header=not file_exists),
+    },
+    'json': {
+        'extensions': ['.json'],
+        'reader': pd.read_json,
+        'writer': lambda df, path, file_exists: df.to_json(path, orient='records', indent=4),
+    },
+    'jsonl': {
+        'extensions': ['.jsonl', '.ndjson'],
+        'reader': lambda path: pd.read_json(path, lines=True),
+        'writer': lambda df, path, file_exists: df.to_json(path, mode='a', orient='records', lines=True),
+    },
+    'excel': {
+        'extensions': ['.xls', '.xlsx'],
+        'reader': pd.read_excel,
+        'writer': lambda df, path, file_exists: df.to_excel(path, index=False),
+    },
+    'xlsx': {
+        'extensions': ['.xlsx'],
+        'reader': pd.read_excel,
+        'writer': lambda df, path, file_exists: df.to_excel(path, index=False),
+    },
+    'parquet': {
+        'extensions': ['.parquet'],
+        'reader': pd.read_parquet,
+        'writer': lambda df, path, file_exists: df.to_parquet(path, index=False),
+    },
+    'feather': {
+        'extensions': ['.feather', '.ftr'],
+        'reader': pd.read_feather,
+        'writer': lambda df, path, file_exists: df.to_feather(path),
+    },
+    'hdf5': {
+        'extensions': ['.h5', '.hdf5'],
+        'reader': _read_hdf5,
+        'writer': lambda df, path, file_exists: df.to_hdf(path, key=HDF5_DEFAULT_KEY, mode='w'),
+    },
+    'xml': {
+        'extensions': ['.xml'],
+        'reader': pd.read_xml,
+        'writer': lambda df, path, file_exists: df.to_xml(path, index=False),
+    },
+    'html': {
+        'extensions': ['.html', '.htm'],
+        'reader': None,
+        'writer': lambda df, path, file_exists: df.to_html(path, index=False),
+    },
+    'md': {
+        'extensions': ['.md', '.markdown'],
+        'reader': None,
+        'writer': lambda df, path, file_exists: df.to_markdown(path, index=False),
+    },
+    'latex': {
+        'extensions': ['.tex'],
+        'reader': None,
+        'writer': lambda df, path, file_exists: df.to_latex(path, index=False),
+    },
+    'sql': {
+        'extensions': ['.sql', '.db', '.sqlite'],
+        'reader': _read_sql,
+        'writer': _write_sql,
+    },
+    'pickle': {
+        'extensions': ['.pkl', '.pickle'],
+        'reader': _read_pickle,
+        'writer': lambda df, path, file_exists: df.to_pickle(path),
+    },
+}
+
+EXTENSION_FORMAT_MAP = {
+    ext: fmt for fmt, fmt_spec in STORAGE_FORMATS.items() for ext in fmt_spec['extensions']
+}
+
+def _needs_newline(path: str) -> bool:
+    if os.path.getsize(path) == 0:
+        return False
+    with open(path, 'rb') as f:
+        f.seek(-1, os.SEEK_END)
+        return f.read(1) != b'\n'
+
 def validate_storage_extension(path: str, storage_type: str):
     """Strictly validates if the file extension matches the storage engine."""
     ext = os.path.splitext(path)[1].lower()
-    mapping = {
-        'csv': ['.csv', '.txt'],
-        'tsv': ['.tsv'],
-        'json': ['.json'],
-        'jsonl': ['.jsonl', '.ndjson'],
-        'excel': ['.xlsx', '.xls'],
-        'xlsx': ['.xlsx', '.xls'],
-        'parquet': ['.parquet'],
-        'feather': ['.feather', '.ftr'],
-        'hdf5': ['.h5', '.hdf5'],
-        'xml': ['.xml'],
-        'html': ['.html', '.htm'],
-        'md': ['.md', '.markdown'],
-        'sql': ['.sql', '.db', '.sqlite'],
-        'pickle': ['.pkl', '.pickle'],
-        'latex': ['.tex']
-    }
-    expected = mapping.get(storage_type, [])
+    format_spec = STORAGE_FORMATS.get(storage_type, {})
+    expected = format_spec.get('extensions', [])
 
     if ext and ext not in expected:
         console.print(
@@ -59,42 +164,14 @@ def load_input(source: str):
         raise FileNotFoundError(f"Source file not found: {source}")
 
     ext = os.path.splitext(source)[1].lower()
-
-    if ext == '.json':
-        return pd.read_json(source)
-    elif ext in ['.jsonl', '.ndjson']:
-        return pd.read_json(source, lines=True)
-    elif ext in ['.xls', '.xlsx']:
-        return pd.read_excel(source)
-    elif ext == '.parquet':
-        return pd.read_parquet(source)
-    elif ext in ['.pkl', '.pickle']:
-        return pd.read_pickle(source)
-    elif ext in ['.feather', '.ftr']:
-        return pd.read_feather(source)
-    elif ext in ['.h5', '.hdf5']:
-        try:
-            return pd.read_hdf(source, key=HDF5_DEFAULT_KEY)
-        except KeyError:
-            available_keys = get_hdf5_keys(source)
-            if available_keys:
-                alt_key = available_keys[0].lstrip('/')
-                console.print(f"[yellow]WARNING:[/yellow] Key '{HDF5_DEFAULT_KEY}' not found in HDF5 file. "
-                             f"Available keys: {available_keys}. Using first available: '{alt_key}'")
-                return pd.read_hdf(source, key=alt_key)
-            else:
-                raise ValueError(f"No datasets found in HDF5 file: {source}")
-    elif ext == '.xml':
-        return pd.read_xml(source)
-    elif ext == '.tsv':
-        return pd.read_csv(source, sep='\t')
-    elif ext in ['.sql', '.db', '.sqlite']:
-        conn = sqlite3.connect(source)
-        df = pd.read_sql('SELECT * FROM metrics', conn)
-        conn.close()
-        return df
-    else:
+    format_key = EXTENSION_FORMAT_MAP.get(ext)
+    if format_key is None:
         return pd.read_csv(source)
+
+    reader = STORAGE_FORMATS[format_key]['reader']
+    if reader is None:
+        raise ValueError(f"Reading {ext} files is not supported.")
+    return reader(source)
 
 
 def normalize_timestamp(df: pd.DataFrame):
@@ -121,20 +198,13 @@ def save_output(df: pd.DataFrame, path: str, storage_type: str):
     """Persistence layer using direct append or Read-Modify-Write logic."""
     file_exists = os.path.isfile(path)
 
-    read_modify_write_formats = {'json', 'parquet', 'excel', 'xlsx', 'xml', 'feather', 'hdf5', 'pickle', 'html', 'md', 'latex', 'sql'}
-    if file_exists and storage_type in read_modify_write_formats:
-        file_size_mb = os.path.getsize(path) / (1024 * 1024)
-        if file_size_mb > CRITICAL_FILE_THRESHOLD_MB:
-            console.print(f"[bold red]CRITICAL:[/bold red] File {storage_type.upper()} ({file_size_mb:.1f} MB) is extremely large. "
-                         f"Read-Modify-Write will likely cause Out-Of-Memory (OOM) errors. "
-                         f"STRONGLY recommend using CSV/TSV/JSONL or a database backend instead.")
-        elif file_size_mb > LARGE_FILE_THRESHOLD_MB:
-            console.print(f"[yellow]WARNING:[/yellow] Appending to large {storage_type.upper()} file ({file_size_mb:.1f} MB). "
-                         f"Read-Modify-Write is expensive for big datasets. Consider using CSV/TSV/JSONL for better performance.")
+    format_spec = STORAGE_FORMATS.get(storage_type)
+    if format_spec is None or format_spec['writer'] is None:
+        raise ValueError(f"Unsupported storage engine: {storage_type}")
 
     # Native append for text-based time series
-    if storage_type in ['csv', 'tsv', 'jsonl']:
-        if file_exists and open(path, 'rb').read()[-1] != ord(b'\n'):
+    if storage_type in {'csv', 'tsv', 'jsonl'}:
+        if file_exists and _needs_newline(path):
             with open(path, 'ab') as f:
                 f.write(b'\n')
         if storage_type == 'csv':
@@ -146,6 +216,17 @@ def save_output(df: pd.DataFrame, path: str, storage_type: str):
         if storage_type == 'jsonl':
             df.to_json(path, mode='a', orient='records', lines=True)
             return
+    
+    # Large file warning for binary/structured formats
+    if file_exists:
+        file_size_mb = os.path.getsize(path) / (1024 * 1024)
+        if file_size_mb > CRITICAL_FILE_THRESHOLD_MB:
+            console.print(f"[bold red]CRITICAL:[/bold red] File {storage_type.upper()} ({file_size_mb:.1f} MB) is extremely large. "
+                         f"Read-Modify-Write will likely cause Out-Of-Memory (OOM) errors. "
+                         f"STRONGLY recommend using CSV/TSV/JSONL or a database backend instead.")
+        elif file_size_mb > LARGE_FILE_THRESHOLD_MB:
+            console.print(f"[yellow]WARNING:[/yellow] Appending to large {storage_type.upper()} file ({file_size_mb:.1f} MB). "
+                         f"Read-Modify-Write is expensive for big datasets. Consider using CSV/TSV/JSONL for better performance.")
 
     # Read-Modify-Write for binary/structured formats
     if file_exists:
@@ -156,31 +237,8 @@ def save_output(df: pd.DataFrame, path: str, storage_type: str):
             console.print(f"[bold red]CRITICAL ERROR:[/bold red] Database corrupted: {e}")
             raise typer.Exit(code=1)
 
-    if storage_type == 'json':
-        df.to_json(path, orient='records', indent=4)
-    elif storage_type == 'parquet':
-        df.to_parquet(path, index=False)
-    elif storage_type in ['excel', 'xlsx']:
-        df.to_excel(path, index=False)
-    elif storage_type == 'xml':
-        df.to_xml(path, index=False)
-    elif storage_type == 'feather':
-        df.to_feather(path)
-    elif storage_type == 'hdf5':
-        df.to_hdf(path, key=HDF5_DEFAULT_KEY, mode='w')
-    elif storage_type == 'pickle':
-        df.to_pickle(path)
-    elif storage_type == 'html':
-        df.to_html(path, index=False)
-    elif storage_type == 'md':
-        df.to_markdown(path, index=False)
-    elif storage_type == 'latex':
-        df.to_latex(path, index=False)
-    elif storage_type == 'sql':
-        conn = sqlite3.connect(path)
-        df.to_sql('metrics', conn, if_exists='replace', index=False)
-        conn.close()
-
+    writer = format_spec['writer']
+    writer(df, path, file_exists)
 
 @app.command()
 def append(
