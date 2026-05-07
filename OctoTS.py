@@ -15,16 +15,10 @@ import urllib.request
 import tempfile
 import urllib
 import cbor2
-from google.protobuf import descriptor as _descriptor
+import sqlite3
 from google.protobuf import message as _message
-import json
 from google.protobuf.internal.decoder import _DecodeVarint
 from contextlib import contextmanager
-
-def get_hdf5_keys(path: str) -> list[str]:
-    """Get all available keys in a pandas-compatible HDF5 file."""
-    with pd.HDFStore(path, mode='r') as store:
-        return list(store.keys())
 
 @contextmanager
 def _download_temp(url: str, suffix: str):
@@ -54,7 +48,7 @@ STORAGE_FORMATS = {
     },
     '.json': {
         'description': 'JSON',
-        'reader': lambda path: pd.read_json(path),
+        'reader': pd.read_json,
         'writer': lambda df, path: df.to_json(path, orient='records', indent=4),
     },
     '.jsonl': {
@@ -81,18 +75,18 @@ STORAGE_FORMATS = {
     },
     '.xls': {
         'description': 'Excel',
-        'reader': lambda path: pd.read_excel(path),
+        'reader': pd.read_excel,
         'writer': 'self._write_excel',
     },
     '.xlsx': {
         'description': 'Excel',
-        'reader': lambda path: pd.read_excel(path),
+        'reader': pd.read_excel,
         'writer': 'self._write_excel',
     },
     '.parquet': {
         'description': 'Parquet',
-        'reader': lambda path: pd.read_parquet(path),
-        'writer': lambda df, path: df.to_parquet(path),
+        'reader': pd.read_parquet,
+        'writer': lambda df, path: df.to_parquet(path, index=False),
         'requires_temp_download': True,
     },
     '.orc': {
@@ -113,7 +107,7 @@ STORAGE_FORMATS = {
     },
     '.xml': {
         'description': 'XML',
-        'reader': lambda path: pd.read_xml(path),
+        'reader': pd.read_xml,
         'writer': lambda df, path: df.to_xml(path, index=False),
     },
     '.html': {
@@ -128,13 +122,13 @@ STORAGE_FORMATS = {
     },
     '.feather': {
         'description': 'Feather',
-        'reader': lambda path: pd.read_feather(path),
+        'reader': pd.read_feather,
         'writer': lambda df, path: df.to_feather(path),
         'requires_temp_download': True,
     },
     '.ftr': {
         'description': 'Feather',
-        'reader': lambda path: pd.read_feather(path),
+        'reader': pd.read_feather,
         'writer': lambda df, path: df.to_feather(path),
         'requires_temp_download': True,
     },
@@ -167,6 +161,21 @@ STORAGE_FORMATS = {
         'reader': 'self._read_netcdf',
         'writer': 'self._write_netcdf',
         'requires_temp_download': True,
+    },
+    '.sql': {
+        'description': 'SQLite',
+        'reader': 'self._read_sql',
+        'writer': 'self._write_sql',
+    },
+    '.db': {
+        'description': 'SQLite',
+        'reader': 'self._read_sql',
+        'writer': 'self._write_sql',
+    },
+    '.sqlite': {
+        'description': 'SQLite',
+        'reader': 'self._read_sql',
+        'writer': 'self._write_sql',
     },
     '.msgpack': {
         'description': 'MessagePack',
@@ -212,6 +221,11 @@ STORAGE_FORMATS = {
     },
 }
 
+def get_hdf5_keys(path: str) -> list[str]:
+    """Get all available keys in a pandas-compatible HDF5 file."""
+    with pd.HDFStore(path, mode='r') as store:
+        return list(store.keys())
+
 class OctoTS(cmd.Cmd):
     intro = 'Welcome to the OctoTS CLI. Type "help" or "?" to list commands.\n'
     prompt = '(OctoTS) '
@@ -222,88 +236,70 @@ class OctoTS(cmd.Cmd):
         self.history = [] 
         self.custom_roles = {}
 
-    def _save_history(self):
-        """
-        Saves a copy of the current dataset to the history stack before modifying it.
-        Keeps the last 5 states to save memory.
-        """
-        if self.dataFile is not None:
-            self.history.append(self.dataFile.copy())
-            if len(self.history) > 5:
-                self.history.pop(0)
+    def _read_yaml(self, filepath):
+        """Read YAML format."""
+        
+        with open(filepath, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+            
+        if isinstance(data, list):
+            return pd.DataFrame(data)
+        elif isinstance(data, dict):
+            return pd.DataFrame([data])
+        else:
+            raise ValueError("YAML file must contain a list of records or a single record dict.")
 
-    def _auto_detect_timecol(self):
-        """
-        Internal method to scan columns for date-like strings.
-        Auto-converts unambiguous formats (YYYY-MM-DD or obvious column names).
-        Prompts for other potential, ambiguous date formats.
-        """
-        if self.dataFile is None or self.dataFile.empty:
-            return
+    def _write_yaml(self, df, filepath):
+        """Write DataFrame to YAML format."""
             
-        print("\nScanning for timestamp columns...")
-        found_potential = False
+        records = df.to_dict(orient='records')
         
-        for col in self.dataFile.columns:
-            if pd.api.types.is_datetime64_any_dtype(self.dataFile[col]):
-                print(f" -> Success: '{col}' is already recognized as a datetime format.")
-                found_potential = True
-                continue
-                
-            if self.dataFile[col].dtype == 'object' or self.dataFile[col].dtype == 'string':
-                sample_series = self.dataFile[col].dropna().head(5)
-                if sample_series.empty:
-                    continue
-                    
-                sample_val = str(sample_series.iloc[0]).strip()
-                
-                has_date_chars = any(char in sample_val for char in ['-', '/', ':'])
-                if not has_date_chars:
-                    continue
-                
-                try:
-                    pd.to_datetime(sample_series)
-                    found_potential = True
-                    
-                    is_unambiguous_format = bool(re.match(r'^\d{4}-\d{2}-\d{2}', sample_val)) or ('T' in sample_val)
-                    
-                    col_lower = str(col).lower()
-                    is_obvious_name = col_lower in ['timestamp', 'time', 'date', 'datetime', 'tstamp']
-                    
-                    if is_unambiguous_format or is_obvious_name:
-                        self._save_history()
-                        print(f" -> Auto-detected safe timestamp in '{col}'. Converting automatically...")
-                        self.dataFile[col] = pd.to_datetime(self.dataFile[col])
-                        print("    Success.")
-                        return 
-                    else:
-                        ans = input(f" -> Detected potential timestamp in '{col}' (e.g., {sample_val}). Convert it? [Y/n]: ").strip().lower()
-                        
-                        if ans in ['', 'y', 'yes']:
-                            self._save_history() 
-                            print(f"    Converting '{col}' to datetime...")
-                            self.dataFile[col] = pd.to_datetime(self.dataFile[col])
-                            print("    Success.")
-                            return 
-                        else:
-                            print(f"    Skipped '{col}'.")
-                            
-                except (ValueError, TypeError, pd.errors.ParserError):
-                    pass 
-        
-        if not found_potential:
-            print(" -> Result: No obvious timestamp columns were detected automatically.")
-            print(" -> ACTION REQUIRED: Please use 'show columns' to check your data,")
-            print(" -> then use 'timecol <column_name>' to manually set your time column.")
+        def _coerce(v):
+            if pd.isna(v):  
+                return None
+            if isinstance(v, pd.Timestamp):
+                return v.to_pydatetime()
+            if hasattr(v, 'item'):
+                return v.item()
+            return v
             
-        print("Scan complete.\n")
+        records = [{k: _coerce(v) for k, v in row.items()} for row in records]
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            yaml.dump(records, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    def _read_sql(self, filepath):
+        """Read SQLite database and return DataFrame from first available table."""
+        conn = sqlite3.connect(filepath)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        
+        if not tables:
+            conn.close()
+            raise ValueError(f"No tables found in SQLite database: {filepath}")
+        
+        table_name = 'metrics' if 'metrics' in tables else tables[0]
+        if table_name != 'metrics':
+            print(f"Warning: Table 'metrics' not found. Using first available table: '{table_name}'")
+        
+        df = pd.read_sql(f'SELECT * FROM {table_name}', conn)
+        conn.close()
+        return df
+
+    def _write_sql(self, df, filepath):
+        """Write DataFrame to SQLite database."""
+        conn = sqlite3.connect(filepath)
+        df.to_sql('metrics', conn, if_exists='replace', index=False)
+        conn.close()
 
     def _read_pickle(self, filepath):
-        """Read Pickle format with security warning."""
-        ans = input("Warning: Pickle files execute arbitrary code. Load anyway? [Y/n]: ")
-        if ans.lower() != 'y':
-            raise ValueError("Pickle load cancelled by user.")
-        return pd.read_pickle(filepath)
+            """Read Pickle format with security warning."""
+            ans = input("Warning: Pickle files execute arbitrary code. Load anyway? [Y/n]: ")
+            if ans.lower() != 'y':
+                raise ValueError("Pickle load cancelled by user.")
+            return pd.read_pickle(filepath)
 
     def _read_html(self, filepath):
         """Read HTML format and return first table."""
@@ -342,16 +338,16 @@ class OctoTS(cmd.Cmd):
                 return pd.read_hdf(filepath, key=alt_key)
             raise ValueError(f"No datasets found in HDF5 file: {filepath}")
 
+    def _write_hdf5(self, df, filepath):
+        """Write HDF5 with default key."""
+        df.to_hdf(filepath, key=HDF5_DEFAULT_KEY, mode='w')
+
     def _write_excel(self, df, filepath):
         """Write Excel files, auto-correcting legacy .xls to .xlsx."""
         if filepath.lower().endswith('.xls'):
             print("Notice: Legacy '.xls' format is deprecated. Auto-correcting to '.xlsx'...")
             filepath = filepath[:-4] + '.xlsx'
         df.to_excel(filepath, index=False, engine='openpyxl')
-
-    def _write_hdf5(self, df, filepath):
-        """Write HDF5 with default key."""
-        df.to_hdf(filepath, key=HDF5_DEFAULT_KEY, mode='w')
 
     def _read_netcdf(self, filepath):
         """Read NetCDF format (popular in meteorology, oceanography, climatology)."""
@@ -373,6 +369,37 @@ class OctoTS(cmd.Cmd):
                 
         except ImportError:
             raise ImportError("xarray and netCDF4 are required for NetCDF support. Run: pip install xarray netCDF4")
+
+    def _write_netcdf(self, df, filepath):
+        """Write DataFrame to NetCDF format with smart dimension handling."""
+        try:
+
+            df_out = df.copy()
+
+            for col in df_out.columns:
+                if pd.api.types.is_datetime64_any_dtype(df_out[col]):
+                    if hasattr(df_out[col].dt, 'tz') and df_out[col].dt.tz is not None:
+                        df_out[col] = df_out[col].dt.tz_localize(None)
+
+            time_cols = [c for c in df_out.columns if pd.api.types.is_datetime64_any_dtype(df_out[c])]
+            
+            if time_cols:
+
+                df_out.set_index(time_cols[0], inplace=True)
+            elif df_out.index.name is None:
+
+                df_out.index.name = 'record'
+
+
+            for col in df_out.columns:
+                if df_out[col].dtype == 'object':
+                    df_out[col] = df_out[col].astype(str)
+
+            ds = xr.Dataset.from_dataframe(df_out)
+            ds.to_netcdf(filepath)
+            
+        except ImportError:
+            raise ImportError("xarray and netCDF4 are required for NetCDF export.")
 
     def _read_msgpack(self, filepath):
         """Read MessagePack binary format."""
@@ -507,68 +534,81 @@ class OctoTS(cmd.Cmd):
             "using your generated binding and load the result with pandas."
         )
 
-    def _read_yaml(self, filepath):
-        """Read YAML format."""
+    def _save_history(self):
+        """
+        Saves a copy of the current dataset to the history stack before modifying it.
+        Keeps the last 5 states to save memory.
+        """
+        if self.dataFile is not None:
+            self.history.append(self.dataFile.copy())
+            if len(self.history) > 5:
+                self.history.pop(0)
+
+    def _auto_detect_timecol(self):
+        """
+        Internal method to scan columns for date-like strings.
+        Auto-converts unambiguous formats (YYYY-MM-DD or obvious column names).
+        Prompts for other potential, ambiguous date formats.
+        """
+        if self.dataFile is None or self.dataFile.empty:
+            return
+            
+        print("\nScanning for timestamp columns...")
+        found_potential = False
         
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-            
-        if isinstance(data, list):
-            return pd.DataFrame(data)
-        elif isinstance(data, dict):
-            return pd.DataFrame([data])
-        else:
-            raise ValueError("YAML file must contain a list of records or a single record dict.")
-
-    def _write_yaml(self, df, filepath):
-        """Write DataFrame to YAML format."""
-            
-        records = df.to_dict(orient='records')
+        for col in self.dataFile.columns:
+            if pd.api.types.is_datetime64_any_dtype(self.dataFile[col]):
+                print(f" -> Success: '{col}' is already recognized as a datetime format.")
+                found_potential = True
+                continue
+                
+            if self.dataFile[col].dtype == 'object' or self.dataFile[col].dtype == 'string':
+                sample_series = self.dataFile[col].dropna().head(5)
+                if sample_series.empty:
+                    continue
+                    
+                sample_val = str(sample_series.iloc[0]).strip()
+                
+                has_date_chars = any(char in sample_val for char in ['-', '/', ':'])
+                if not has_date_chars:
+                    continue
+                
+                try:
+                    pd.to_datetime(sample_series)
+                    found_potential = True
+                    
+                    is_unambiguous_format = bool(re.match(r'^\d{4}-\d{2}-\d{2}', sample_val)) or ('T' in sample_val)
+                    
+                    col_lower = str(col).lower()
+                    is_obvious_name = col_lower in ['timestamp', 'time', 'date', 'datetime', 'tstamp']
+                    
+                    if is_unambiguous_format or is_obvious_name:
+                        self._save_history()
+                        print(f" -> Auto-detected safe timestamp in '{col}'. Converting automatically...")
+                        self.dataFile[col] = pd.to_datetime(self.dataFile[col])
+                        print("    Success.")
+                        return 
+                    else:
+                        ans = input(f" -> Detected potential timestamp in '{col}' (e.g., {sample_val}). Convert it? [Y/n]: ").strip().lower()
+                        
+                        if ans in ['', 'y', 'yes']:
+                            self._save_history() 
+                            print(f"    Converting '{col}' to datetime...")
+                            self.dataFile[col] = pd.to_datetime(self.dataFile[col])
+                            print("    Success.")
+                            return 
+                        else:
+                            print(f"    Skipped '{col}'.")
+                            
+                except (ValueError, TypeError, pd.errors.ParserError):
+                    pass 
         
-        def _coerce(v):
-            if pd.isna(v):  
-                return None
-            if isinstance(v, pd.Timestamp):
-                return v.to_pydatetime()
-            if hasattr(v, 'item'):
-                return v.item()
-            return v
+        if not found_potential:
+            print(" -> Result: No obvious timestamp columns were detected automatically.")
+            print(" -> ACTION REQUIRED: Please use 'show columns' to check your data,")
+            print(" -> then use 'timecol <column_name>' to manually set your time column.")
             
-        records = [{k: _coerce(v) for k, v in row.items()} for row in records]
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            yaml.dump(records, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-
-    def _write_netcdf(self, df, filepath):
-        """Write DataFrame to NetCDF format with smart dimension handling."""
-        try:
-
-            df_out = df.copy()
-
-            for col in df_out.columns:
-                if pd.api.types.is_datetime64_any_dtype(df_out[col]):
-                    if hasattr(df_out[col].dt, 'tz') and df_out[col].dt.tz is not None:
-                        df_out[col] = df_out[col].dt.tz_localize(None)
-
-            time_cols = [c for c in df_out.columns if pd.api.types.is_datetime64_any_dtype(df_out[c])]
-            
-            if time_cols:
-
-                df_out.set_index(time_cols[0], inplace=True)
-            elif df_out.index.name is None:
-
-                df_out.index.name = 'record'
-
-
-            for col in df_out.columns:
-                if df_out[col].dtype == 'object':
-                    df_out[col] = df_out[col].astype(str)
-
-            ds = xr.Dataset.from_dataframe(df_out)
-            ds.to_netcdf(filepath)
-            
-        except ImportError:
-            raise ImportError("xarray and netCDF4 are required for NetCDF export.")
+        print("Scan complete.\n")
 
     def do_import(self, filepath):
         """
@@ -577,7 +617,7 @@ class OctoTS(cmd.Cmd):
         Supported formats:
           Text/Tabular : CSV, TSV, JSON, JSON Lines (JSONL/NDJSON), XML, HTML, YAML
           Spreadsheet  : Excel (.xls, .xlsx)
-          Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc/.nc4/.cdf)
+          Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc/.nc4/.cdf), SQLite (.sql/.db)
           Serialized   : MessagePack (.msgpack/.mpack), CBOR (.cbor)
           Schema-based : Protobuf (.pb/.proto) *, FlatBuffers (.bin/.fbs) *
                          (* requires pre-compiled Python bindings — see help)
@@ -950,7 +990,7 @@ class OctoTS(cmd.Cmd):
         Supported formats:
           Text/Tabular : CSV, TSV (.tsv), JSON, JSON Lines (.jsonl/.ndjson), XML, HTML, YAML
           Spreadsheet  : Excel (.xlsx)
-          Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc)
+          Binary       : Parquet, ORC, Feather, HDF5, Pickle, NetCDF (.nc), SQLite (.sql/.db)
           Serialized   : MessagePack (.msgpack), CBOR (.cbor)
 
         Usage: export <filepath>  (alias: save <filepath>)

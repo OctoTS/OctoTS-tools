@@ -2,10 +2,12 @@ import typer
 import sys
 import os
 import pandas as pd
-from datetime import datetime, timezone
-from typing import Callable
+from datetime import datetime, date, timezone
 from rich.console import Console
 import sqlite3
+import yaml
+import xarray as xr
+import msgpack
 
 app = typer.Typer(
     help="OctoTS Batch Processor",
@@ -16,11 +18,37 @@ HDF5_DEFAULT_KEY = 'data'
 LARGE_FILE_THRESHOLD_MB = 500  # Warning threshold: noticeable lag on typical machines
 CRITICAL_FILE_THRESHOLD_MB = 1500  # Critical threshold: high OOM risk on 8-16GB machines
 
+def _read_yaml(path: str) -> pd.DataFrame:
+    with open(path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f)
+    if isinstance(data, list):
+        return pd.DataFrame(data)
+    elif isinstance(data, dict):
+        return pd.DataFrame([data])
+    else:
+        raise ValueError("YAML file must contain a list of records or a single record dict.")
+
+def _write_yaml(df: pd.DataFrame, path: str, file_exists: bool):
+    records = df.to_dict(orient='records')
+    
+    def _coerce(v):
+        if pd.isna(v):  
+            return None
+        if isinstance(v, pd.Timestamp):
+            return v.to_pydatetime()
+        if hasattr(v, 'item'):
+            return v.item()
+        return v
+        
+    records = [{k: _coerce(v) for k, v in row.items()} for row in records]
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        yaml.dump(records, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
 def get_hdf5_keys(path: str) -> list[str]:
     """Get all available keys in a pandas-compatible HDF5 file."""
     with pd.HDFStore(path, mode='r') as store:
         return list(store.keys())
-
 
 def _read_hdf5(path: str) -> pd.DataFrame:
     try:
@@ -34,23 +62,82 @@ def _read_hdf5(path: str) -> pd.DataFrame:
             return pd.read_hdf(path, key=alt_key)
         raise ValueError(f"No datasets found in HDF5 file: {path}")
 
+def _read_html(path: str) -> pd.DataFrame:
+    dfs = pd.read_html(path)
+    if not dfs:
+        raise ValueError(f"No tables found in HTML file: {path}")
+    return dfs[0]
 
 def _read_pickle(path: str) -> pd.DataFrame:
     console.print("[yellow]WARNING:[/yellow] Loading pickle files executes arbitrary code. Only load trusted sources.")
     return pd.read_pickle(path)
 
-
 def _read_sql(path: str) -> pd.DataFrame:
     conn = sqlite3.connect(path)
-    df = pd.read_sql('SELECT * FROM metrics', conn)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = [row[0] for row in cursor.fetchall()]
+    cursor.close()
+    
+    if not tables:
+        conn.close()
+        raise ValueError(f"No tables found in SQLite database: {path}")
+    
+    table_name = 'metrics' if 'metrics' in tables else tables[0]
+    if table_name != 'metrics':
+        console.print(f"[yellow]WARNING:[/yellow] Table 'metrics' not found. Using first available table: '{table_name}'")
+    
+    df = pd.read_sql(f'SELECT * FROM {table_name}', conn)
     conn.close()
     return df
-
 
 def _write_sql(df: pd.DataFrame, path: str, file_exists: bool):
     conn = sqlite3.connect(path)
     df.to_sql('metrics', conn, if_exists='replace', index=False)
     conn.close()
+
+def _read_netcdf(path: str) -> pd.DataFrame:
+    ds = xr.open_dataset(path)
+    try:
+        df = ds.to_dataframe().reset_index()
+    except ValueError:
+        record = {k: v.item() for k, v in ds.variables.items()}
+        df = pd.DataFrame([record])
+    finally:
+        ds.close()
+    return df
+
+def _write_netcdf(df: pd.DataFrame, path: str, file_exists: bool):
+    df_out = df.copy()
+    for col in df_out.columns:
+        if pd.api.types.is_datetime64_any_dtype(df_out[col]):
+            if df_out[col].dt.tz is not None:
+                df_out[col] = df_out[col].dt.tz_localize(None)
+    ds = df_out.to_xarray()
+    ds.to_netcdf(path)
+
+def _read_msgpack(path: str) -> pd.DataFrame:
+    with open(path, 'rb') as f:
+        data = msgpack.unpack(f, raw=False)
+
+    if isinstance(data, list):
+        return pd.DataFrame(data)
+    elif isinstance(data, dict):
+        return pd.DataFrame([data])
+    else:
+        raise ValueError("MessagePack file must contain a list of records or a single record dict.")
+
+def _write_msgpack(df: pd.DataFrame, path: str, file_exists: bool):
+    records = df.to_dict(orient='records')
+
+    def _coerce(v):
+        if isinstance(v, (pd.Timestamp, datetime, date)):
+            return str(v)
+        return v
+
+    records = [{k: _coerce(v) for k, v in row.items()} for row in records]
+    with open(path, 'wb') as f:
+        msgpack.pack(records, f, use_bin_type=True)
 
 
 STORAGE_FORMATS = {
@@ -73,6 +160,11 @@ STORAGE_FORMATS = {
         'extensions': ['.jsonl', '.ndjson'],
         'reader': lambda path: pd.read_json(path, lines=True),
         'writer': lambda df, path, file_exists: df.to_json(path, mode='a', orient='records', lines=True),
+    },
+    'yaml': {
+        'extensions': ['.yaml', '.yml'],
+        'reader': _read_yaml,
+        'writer': _write_yaml,
     },
     'excel': {
         'extensions': ['.xls', '.xlsx'],
@@ -106,7 +198,7 @@ STORAGE_FORMATS = {
     },
     'html': {
         'extensions': ['.html', '.htm'],
-        'reader': None,
+        'reader': _read_html,
         'writer': lambda df, path, file_exists: df.to_html(path, index=False),
     },
     'md': {
@@ -118,6 +210,16 @@ STORAGE_FORMATS = {
         'extensions': ['.tex'],
         'reader': None,
         'writer': lambda df, path, file_exists: df.to_latex(path, index=False),
+    },
+    'netcdf': {
+        'extensions': ['.nc', '.nc4', '.cdf'],
+        'reader': _read_netcdf,
+        'writer': _write_netcdf,
+    },
+    'msgpack': {
+        'extensions': ['.msgpack', '.mpack'],
+        'reader': _read_msgpack,
+        'writer': _write_msgpack,
     },
     'sql': {
         'extensions': ['.sql', '.db', '.sqlite'],
@@ -153,7 +255,6 @@ def validate_storage_extension(path: str, storage_type: str):
             f"[bold red]ERROR:[/bold red] Extension mismatch! Storage is '{storage_type}' but file is '{ext}'.")
         console.print("To change formats, use the 'convert' command.")
         raise typer.Exit(code=1)
-
 
 def load_input(source: str):
     """Autodetect format and load into a DataFrame."""
