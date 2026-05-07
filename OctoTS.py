@@ -90,37 +90,6 @@ STORAGE_FORMATS = {
         'writer': lambda df, path: df.to_parquet(path, index=False),
         'requires_temp_download': True,
     },
-    '.orc': {
-        'description': 'Apache ORC',
-        'reader': 'self._read_orc',
-        'writer': 'self._write_orc',
-        'requires_temp_download': True,
-    },
-    '.pkl': {
-        'description': 'Pickle',
-        'reader': 'self._read_pickle',
-        'writer': lambda df, path: df.to_pickle(path),
-    },
-    '.pickle': {
-        'description': 'Pickle',
-        'reader': 'self._read_pickle',
-        'writer': lambda df, path: df.to_pickle(path),
-    },
-    '.xml': {
-        'description': 'XML',
-        'reader': pd.read_xml,
-        'writer': lambda df, path: df.to_xml(path, index=False),
-    },
-    '.html': {
-        'description': 'HTML',
-        'reader': 'self._read_html',
-        'writer': lambda df, path: df.to_html(path, index=False),
-    },
-    '.htm': {
-        'description': 'HTML',
-        'reader': 'self._read_html',
-        'writer': lambda df, path: df.to_html(path, index=False),
-    },
     '.feather': {
         'description': 'Feather',
         'reader': pd.read_feather,
@@ -145,6 +114,21 @@ STORAGE_FORMATS = {
         'writer': 'self._write_hdf5',
         'requires_temp_download': True,
     },
+    '.xml': {
+        'description': 'XML',
+        'reader': pd.read_xml,
+        'writer': lambda df, path: df.to_xml(path, index=False),
+    },
+    '.html': {
+        'description': 'HTML',
+        'reader': 'self._read_html',
+        'writer': lambda df, path: df.to_html(path, index=False),
+    },
+    '.htm': {
+        'description': 'HTML',
+        'reader': 'self._read_html',
+        'writer': lambda df, path: df.to_html(path, index=False),
+    },
     '.nc': {
         'description': 'NetCDF',
         'reader': 'self._read_netcdf',
@@ -163,21 +147,6 @@ STORAGE_FORMATS = {
         'writer': 'self._write_netcdf',
         'requires_temp_download': True,
     },
-    '.sql': {
-        'description': 'SQLite',
-        'reader': 'self._read_sql',
-        'writer': 'self._write_sql',
-    },
-    '.db': {
-        'description': 'SQLite',
-        'reader': 'self._read_sql',
-        'writer': 'self._write_sql',
-    },
-    '.sqlite': {
-        'description': 'SQLite',
-        'reader': 'self._read_sql',
-        'writer': 'self._write_sql',
-    },
     '.msgpack': {
         'description': 'MessagePack',
         'reader': 'self._read_msgpack',
@@ -194,6 +163,37 @@ STORAGE_FORMATS = {
         'description': 'CBOR',
         'reader': 'self._read_cbor',
         'writer': 'self._write_cbor',
+        'requires_temp_download': True,
+    },
+    '.sql': {
+        'description': 'SQLite',
+        'reader': 'self._read_sql',
+        'writer': 'self._write_sql',
+    },
+    '.db': {
+        'description': 'SQLite',
+        'reader': 'self._read_sql',
+        'writer': 'self._write_sql',
+    },
+    '.sqlite': {
+        'description': 'SQLite',
+        'reader': 'self._read_sql',
+        'writer': 'self._write_sql',
+    },
+    '.pkl': {
+        'description': 'Pickle',
+        'reader': 'self._read_pickle',
+        'writer': lambda df, path: df.to_pickle(path),
+    },
+    '.pickle': {
+        'description': 'Pickle',
+        'reader': 'self._read_pickle',
+        'writer': lambda df, path: df.to_pickle(path),
+    },
+    '.orc': {
+        'description': 'Apache ORC',
+        'reader': 'self._read_orc',
+        'writer': 'self._write_orc',
         'requires_temp_download': True,
     },
     '.pb': {
@@ -310,23 +310,6 @@ class OctoTS(cmd.Cmd):
         self._html_table_count = len(dfs)
         return dfs[0]
 
-    def _read_orc(self, filepath):
-        """Read Apache ORC format."""
-        try:
-            
-            table = orc.read_table(filepath)
-            return table.to_pandas()
-        except ImportError:
-            raise ImportError("pyarrow is required for ORC support. Run: pip install pyarrow")
-
-    def _write_orc(self, df, filepath):
-        """Write DataFrame to Apache ORC format."""
-        try:
-            table = pa.Table.from_pandas(df)
-            orc.write_table(table, filepath)
-        except ImportError:
-            raise ImportError("pyarrow is required for ORC export. Run: pip install pyarrow")
-
     def _read_hdf5(self, filepath):
         """Read HDF5 with fallback to the first available key when 'data' is missing."""
         try:
@@ -440,12 +423,42 @@ class OctoTS(cmd.Cmd):
         """Write DataFrame to CBOR format."""
         records = df.to_dict(orient='records')
         def _coerce(v):
+            if pd.isna(v):
+                return None
             if isinstance(v, pd.Timestamp):
+                if v.tz is None:
+                    return str(v)
                 return v.to_pydatetime()
+            if isinstance(v, datetime.datetime):
+                if v.tzinfo is None:
+                    return str(v)
+                return v
+            if isinstance(v, datetime.date) and not isinstance(v, datetime.datetime):
+                return v.isoformat()
+            if isinstance(v, datetime.time):
+                return v.isoformat()
+            if hasattr(v, 'item') and not isinstance(v, (str, bytes, bytearray, dict, list, tuple, set)):
+                return v.item()
             return v
         records = [{k: _coerce(v) for k, v in row.items()} for row in records]
         with open(filepath, 'wb') as f:
             cbor2.dump(records, f)
+
+    def _read_orc(self, filepath):
+        """Read Apache ORC format."""
+        try:
+            table = orc.read_table(filepath)
+            return table.to_pandas()
+        except ImportError:
+            raise ImportError("pyarrow is required for ORC support. Run: pip install pyarrow")
+
+    def _write_orc(self, df, filepath):
+        """Write DataFrame to Apache ORC format."""
+        try:
+            table = pa.Table.from_pandas(df)
+            orc.write_table(table, filepath)
+        except ImportError:
+            raise ImportError("pyarrow is required for ORC export. Run: pip install pyarrow")
 
     def _read_protobuf(self, filepath):
         """
@@ -1027,7 +1040,7 @@ class OctoTS(cmd.Cmd):
 
         df_to_save = self.dataFile.copy()
         
-        if ext in ['.csv', '.tsv', '.json', '.jsonl', '.ndjson', '.xml', '.html', '.htm', '']:
+        if ext in ['.csv', '.tsv', '.json', '.jsonl', '.ndjson', '.xml', '.html', '.htm', '.orc', '']:
             for col in df_to_save.columns:
                 if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
                     df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')

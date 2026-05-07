@@ -57,7 +57,7 @@ Jane Smith,42
 | Time Series | CSV, TSV, JSON, JSONL |
 | Documents | HTML, XML, MD, LaTeX, YAML |
 | Spreadsheet | Excel |
-| Big Data | Parquet, Feather, HDF5, Pickle, NetCDF, MessagePack |
+| Big Data | Parquet, Feather, HDF5, Pickle, NetCDF, MessagePack, CBOR, ORC |
 | Databases | SQL / SQLite |
 
 ### Data Integrity & Safety

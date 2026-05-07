@@ -2,12 +2,15 @@ import typer
 import sys
 import os
 import pandas as pd
-from datetime import datetime, date, timezone
+from datetime import datetime, date, time, timezone
 from rich.console import Console
 import sqlite3
 import yaml
 import xarray as xr
 import msgpack
+import cbor2
+import pyarrow.orc as orc
+import pyarrow as pa
 
 app = typer.Typer(
     help="OctoTS Batch Processor",
@@ -141,6 +144,53 @@ def _write_msgpack(df: pd.DataFrame, path: str, file_exists: bool):
     with open(path, 'wb') as f:
         msgpack.pack(records, f, use_bin_type=True)
 
+def _read_cbor(path: str) -> pd.DataFrame:
+    with open(path, 'rb') as f:
+        data = cbor2.load(f)
+    if isinstance(data, list):
+        return pd.DataFrame(data)
+    elif isinstance(data, dict):
+        return pd.DataFrame([data])
+    else:
+        raise ValueError("CBOR file must contain a list of records or a single record dict.")
+
+def _write_cbor(df: pd.DataFrame, path: str, file_exists: bool):
+    records = df.to_dict(orient='records')
+    def _coerce(v):
+        if pd.isna(v):
+            return None
+        if isinstance(v, pd.Timestamp):
+            if v.tz is None:
+                return str(v)
+            return v.to_pydatetime()
+        if isinstance(v, datetime):
+            if v.tzinfo is None:
+                return str(v)
+            return v
+        if isinstance(v, date) and not isinstance(v, datetime):
+            return v.isoformat()
+        if isinstance(v, time):
+            return v.isoformat()
+        if hasattr(v, 'item') and not isinstance(v, (str, bytes, bytearray, dict, list, tuple, set)):
+            return v.item()
+        return v
+    records = [{k: _coerce(v) for k, v in row.items()} for row in records]
+    with open(path, 'wb') as f:
+        cbor2.dump(records, f)
+
+def _read_orc(path: str) -> pd.DataFrame:
+    try:
+        table = orc.read_table(path)
+        return table.to_pandas()
+    except ImportError:
+        raise ImportError("pyarrow is required for ORC support. Run: pip install pyarrow")
+
+def _write_orc(df: pd.DataFrame, path: str, file_exists: bool):
+    try:
+        table = pa.Table.from_pandas(df)
+        orc.write_table(table, path)
+    except ImportError:
+        raise ImportError("pyarrow is required for ORC export. Run: pip install pyarrow")
 
 STORAGE_FORMATS = {
     'csv': {
@@ -203,16 +253,6 @@ STORAGE_FORMATS = {
         'reader': _read_html,
         'writer': lambda df, path, file_exists: df.to_html(path, index=False),
     },
-    'md': {
-        'extensions': ['.md', '.markdown'],
-        'reader': None,
-        'writer': lambda df, path, file_exists: df.to_markdown(path, index=False),
-    },
-    'latex': {
-        'extensions': ['.tex'],
-        'reader': None,
-        'writer': lambda df, path, file_exists: df.to_latex(path, index=False),
-    },
     'netcdf': {
         'extensions': ['.nc', '.nc4', '.cdf'],
         'reader': _read_netcdf,
@@ -223,6 +263,11 @@ STORAGE_FORMATS = {
         'reader': _read_msgpack,
         'writer': _write_msgpack,
     },
+    'cbor': {
+        'extensions': ['.cbor'],
+        'reader': _read_cbor,
+        'writer': _write_cbor,
+    },
     'sql': {
         'extensions': ['.sql', '.db', '.sqlite'],
         'reader': _read_sql,
@@ -232,6 +277,21 @@ STORAGE_FORMATS = {
         'extensions': ['.pkl', '.pickle'],
         'reader': _read_pickle,
         'writer': lambda df, path, file_exists: df.to_pickle(path),
+    },
+    'orc': {
+        'extensions': ['.orc'],
+        'reader': _read_orc,
+        'writer': _write_orc,
+    },
+    'md': {
+        'extensions': ['.md', '.markdown'],
+        'reader': None,
+        'writer': lambda df, path, file_exists: df.to_markdown(path, index=False),
+    },
+    'latex': {
+        'extensions': ['.tex'],
+        'reader': None,
+        'writer': lambda df, path, file_exists: df.to_latex(path, index=False),
     },
 }
 
