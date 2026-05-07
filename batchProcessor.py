@@ -14,7 +14,9 @@ app = typer.Typer(
     no_args_is_help=True
 )
 console = Console()
+
 HDF5_DEFAULT_KEY = 'data'
+SQL_DEFAULT_TABLE = 'data'
 LARGE_FILE_THRESHOLD_MB = 500  # Warning threshold: noticeable lag on typical machines
 CRITICAL_FILE_THRESHOLD_MB = 1500  # Critical threshold: high OOM risk on 8-16GB machines
 
@@ -83,9 +85,9 @@ def _read_sql(path: str) -> pd.DataFrame:
         conn.close()
         raise ValueError(f"No tables found in SQLite database: {path}")
     
-    table_name = 'metrics' if 'metrics' in tables else tables[0]
-    if table_name != 'metrics':
-        console.print(f"[yellow]WARNING:[/yellow] Table 'metrics' not found. Using first available table: '{table_name}'")
+    table_name = SQL_DEFAULT_TABLE if SQL_DEFAULT_TABLE in tables else tables[0]
+    if table_name != SQL_DEFAULT_TABLE:
+        console.print(f"[yellow]WARNING:[/yellow] Table '{SQL_DEFAULT_TABLE}' not found. Using first available table: '{table_name}'")
     
     df = pd.read_sql(f'SELECT * FROM {table_name}', conn)
     conn.close()
@@ -93,7 +95,7 @@ def _read_sql(path: str) -> pd.DataFrame:
 
 def _write_sql(df: pd.DataFrame, path: str, file_exists: bool):
     conn = sqlite3.connect(path)
-    df.to_sql('metrics', conn, if_exists='replace', index=False)
+    df.to_sql(SQL_DEFAULT_TABLE, conn, if_exists='replace', index=False)
     conn.close()
 
 def _read_netcdf(path: str) -> pd.DataFrame:

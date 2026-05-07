@@ -34,6 +34,7 @@ def _download_temp(url: str, suffix: str):
             os.unlink(tmp_path)
 
 HDF5_DEFAULT_KEY = 'data'
+SQL_DEFAULT_TABLE = 'data'
 
 STORAGE_FORMATS = {
     '.csv': {
@@ -280,9 +281,9 @@ class OctoTS(cmd.Cmd):
             conn.close()
             raise ValueError(f"No tables found in SQLite database: {filepath}")
         
-        table_name = 'metrics' if 'metrics' in tables else tables[0]
-        if table_name != 'metrics':
-            print(f"Warning: Table 'metrics' not found. Using first available table: '{table_name}'")
+        table_name = SQL_DEFAULT_TABLE if SQL_DEFAULT_TABLE in tables else tables[0]
+        if table_name != SQL_DEFAULT_TABLE:
+            print(f"Warning: Table '{SQL_DEFAULT_TABLE}' not found. Using first available table: '{table_name}'")
         
         df = pd.read_sql(f'SELECT * FROM {table_name}', conn)
         conn.close()
@@ -291,7 +292,7 @@ class OctoTS(cmd.Cmd):
     def _write_sql(self, df, filepath):
         """Write DataFrame to SQLite database."""
         conn = sqlite3.connect(filepath)
-        df.to_sql('metrics', conn, if_exists='replace', index=False)
+        df.to_sql(SQL_DEFAULT_TABLE, conn, if_exists='replace', index=False)
         conn.close()
 
     def _read_pickle(self, filepath):
@@ -583,19 +584,31 @@ class OctoTS(cmd.Cmd):
                     is_obvious_name = col_lower in ['timestamp', 'time', 'date', 'datetime', 'tstamp']
                     
                     if is_unambiguous_format or is_obvious_name:
-                        self._save_history()
                         print(f" -> Auto-detected safe timestamp in '{col}'. Converting automatically...")
-                        self.dataFile[col] = pd.to_datetime(self.dataFile[col])
-                        print("    Success.")
+                        try:
+                            self._save_history()
+                            self.dataFile[col] = pd.to_datetime(self.dataFile[col])
+                            print("    Success.")
+                        except Exception as e:
+                            self.history.pop()
+                            print(f"Error converting column to datetime.")
+                            print(" -> ACTION REQUIRED: Please use 'show columns' to check your data,")
+                            print(" -> then use 'timecol <column_name>' to manually set your time column.")
                         return 
                     else:
                         ans = input(f" -> Detected potential timestamp in '{col}' (e.g., {sample_val}). Convert it? [Y/n]: ").strip().lower()
                         
                         if ans in ['', 'y', 'yes']:
-                            self._save_history() 
                             print(f"    Converting '{col}' to datetime...")
-                            self.dataFile[col] = pd.to_datetime(self.dataFile[col])
-                            print("    Success.")
+                            try:
+                                self._save_history()
+                                self.dataFile[col] = pd.to_datetime(self.dataFile[col])
+                                print("    Success.")
+                            except Exception as e:
+                                self.history.pop()
+                                print(f"Error converting column to datetime.")
+                                print(" -> ACTION REQUIRED: Please use 'show columns' to check your data,")
+                                print(" -> then use 'timecol <column_name>' to manually set your time column.")
                             return 
                         else:
                             print(f"    Skipped '{col}'.")
@@ -811,14 +824,14 @@ class OctoTS(cmd.Cmd):
             return
             
         if col_name not in self.dataFile.columns:
-            print(f"Error: Column '{col_name}' not found. Use 'columns' to see available columns.")
+            print(f"Error: Column '{col_name}' not found. Use 'show columns' to see available columns.")
             return
             
         try:
             self._save_history()
             print(f"Converting '{col_name}' to datetime objects...")
             self.dataFile[col_name] = pd.to_datetime(self.dataFile[col_name])
-            print(f"Success: '{col_name}' is now a datetime type. You can verify with 'columns'.")
+            print(f"Success: '{col_name}' is now a datetime type. You can verify with 'show columns'.")
         except Exception as e:
             self.history.pop()
             print(f"Error converting column to datetime. Are you sure it contains valid dates? Error: {e}")
