@@ -54,16 +54,24 @@ Jane Smith,42
 ### Supported Storage Engines
 | Category | Formats |
 | :--- | :--- |
-| Time Series | CSV, TSV, JSONL |
-| Big Data | Parquet, Feather, HDF5, Pickle |
-| Reports | Excel, HTML, XML, MD, LaTeX |
-| Databases | SQL (SQLite) |
+| Time Series | CSV, TSV, JSON, JSONL |
+| Documents | HTML, XML, MD, LaTeX, YAML |
+| Spreadsheet | Excel |
+| Big Data | Parquet, Feather, HDF5, Pickle, NetCDF, MessagePack, CBOR, ORC |
+| Databases | SQL / SQLite |
 
 ### Data Integrity & Safety
 - **Self-Append Guard**: Prevents a file from appending to itself.
 - **Extension Enforcement**: Validates that engine matches file extension.
 - **Fail-Fast Recovery**: Aborts on corrupted database to prevent data loss.
 - **Empty Payload Protection**: Skips write cycle if input is empty.
+
+### Known Limitations
+- SQLite import/export works with SQLite files, and import will use the first table found if `data` is not present.
+- HTML import reads only the first table from the HTML document.
+- YAML import expects either a list of records or a single record object.
+- MD and LaTeX support in the Batch Processor is write-only; they cannot be read back in currently.
+- Pickle input is supported but unsafe: only use trusted sources.
 
 ---
 
@@ -74,7 +82,7 @@ OctoTS is a lightweight, interactive Command-Line Interface (CLI) tool designed 
 
 ## Features
 
-* **Multi-Format Support:** Import and save data as CSV, JSON, Excel (`.xlsx`), Parquet, or Pickle.
+* **Multi-Format Support:** Import and save data as CSV, JSON, Excel (`.xlsx`), Parquet, Pickle, and SQLite (`.sql`, `.db`, `.sqlite`).
 * **Smart Timestamp Detection:** Automatically scans your dataset on import to find and convert date-like strings into usable datetime objects.
 * **Flexible Trimming:** Remove missing values, strip whitespace, limit row counts, or filter data before, after, or between specific dates.
 * **Undo System:** Made a mistake? Use the `undo` command to revert to previous states (keeps up to the last 5 states in memory).
