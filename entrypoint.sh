@@ -7,6 +7,11 @@ INPUT="${2:?INPUT argument is required}"
 OUTPUT="${3:?OUTPUT argument is required}"
 BRANCH="${4:?BRANCH argument is required}"
 
+if [[ ! "$BRANCH" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
+  echo "Error: Invalid branch name '$BRANCH'"
+  exit 1
+fi
+
 echo "Configuring git..."
 git config --global user.email "github-actions[bot]@users.noreply.github.com"
 git config --global user.name "github-actions[bot]"
@@ -15,10 +20,6 @@ git config --global --add safe.directory /github/workspace
 echo "Preparing branch..."
 git fetch origin
 
-if [[ ! "$BRANCH" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
-  echo "Error: Invalid branch name '$BRANCH'"
-  exit 1
-fi
 if git ls-remote --exit-code --heads origin "$BRANCH"; then
   git checkout "$BRANCH"
   git pull origin "$BRANCH"
