@@ -67,7 +67,7 @@ Jane Smith,42
 - **Empty Payload Protection**: Skips write cycle if input is empty.
 
 ### Known Limitations
-- SQLite import/export works with SQLite files, and import will use the first table found if `metrics` is not present.
+- SQLite import/export works with SQLite files, and import will use the first table found if `data` is not present.
 - HTML import reads only the first table from the HTML document.
 - YAML import expects either a list of records or a single record object.
 - MD and LaTeX support in the Batch Processor is write-only; they cannot be read back in currently.
