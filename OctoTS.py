@@ -756,7 +756,8 @@ class OctoTS(cmd.Cmd):
             n = 5
             if len(args) > 1 and args[-1].isdigit():
                 n = int(args[-1])
-            print(f"\n--- First {n} Rows ---")
+            actual_n = min(n, len(self.dataFile))
+            print(f"\n--- First {actual_n} Rows ---")
             print(self.dataFile.head(n).to_string())
             print("-" * 20 + "\n")
 
@@ -764,7 +765,8 @@ class OctoTS(cmd.Cmd):
             n = 5
             if len(args) > 1 and args[-1].isdigit():
                 n = int(args[-1])
-            print(f"\n--- Last {n} Rows ---")
+            actual_n = min(n, len(self.dataFile))
+            print(f"\n--- Last {actual_n} Rows ---")
             print(self.dataFile.tail(n).to_string())
             print("-" * 20 + "\n")
 
