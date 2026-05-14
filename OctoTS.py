@@ -1040,7 +1040,7 @@ class OctoTS(cmd.Cmd):
 
         df_to_save = self.dataFile.copy()
         
-        if ext in ['.csv', '.tsv', '.json', '.jsonl', '.ndjson', '.xml', '.html', '.htm', '.orc', '']:
+        if ext in ['.csv', '.tsv', '.json', '.jsonl', '.ndjson', '.xml', '.html', '.htm', '.orc', '.parquet', '']:
             for col in df_to_save.columns:
                 if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
                     df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
