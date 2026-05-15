@@ -756,7 +756,8 @@ class OctoTS(cmd.Cmd):
             n = 5
             if len(args) > 1 and args[-1].isdigit():
                 n = int(args[-1])
-            print(f"\n--- First {n} Rows ---")
+            actual_n = min(n, len(self.dataFile))
+            print(f"\n--- First {actual_n} Rows ---")
             print(self.dataFile.head(n).to_string())
             print("-" * 20 + "\n")
 
@@ -764,7 +765,8 @@ class OctoTS(cmd.Cmd):
             n = 5
             if len(args) > 1 and args[-1].isdigit():
                 n = int(args[-1])
-            print(f"\n--- Last {n} Rows ---")
+            actual_n = min(n, len(self.dataFile))
+            print(f"\n--- Last {actual_n} Rows ---")
             print(self.dataFile.tail(n).to_string())
             print("-" * 20 + "\n")
 
@@ -1040,7 +1042,7 @@ class OctoTS(cmd.Cmd):
 
         df_to_save = self.dataFile.copy()
         
-        if ext in ['.csv', '.tsv', '.json', '.jsonl', '.ndjson', '.xml', '.html', '.htm', '.orc', '']:
+        if ext in ['.csv', '.tsv', '.json', '.jsonl', '.ndjson', '.xml', '.html', '.htm', '.orc', '.parquet', '']:
             for col in df_to_save.columns:
                 if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
                     df_to_save[col] = df_to_save[col].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
