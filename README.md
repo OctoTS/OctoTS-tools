@@ -142,6 +142,10 @@ python octots.py
     Sorts the dataset by a specific column in ascending (default) or descending order.
     Example: sort temperature desc
 
+- `aggregate <frequency> [grouping_column]`
+
+    Aggregates data by a specified time frequency and an optional grouping column.
+
 ### Trimming & Cleaning
 
 The trim command is highly versatile and allows you to clean or slice your dataset in multiple ways:
