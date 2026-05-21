@@ -1110,6 +1110,87 @@ class OctoTS(cmd.Cmd):
             print(f"Notice: You marked this as Time, but it's not a datetime object.")
             print(f"Consider running: timecol {col_name}")
 
+    def do_aggregate(self, arg):
+        """
+        Aggregates data by a specified time frequency and an optional grouping column.
+        
+        Usage: 
+          aggregate <frequency> [grouping_column]
+        
+        Available frequencies:
+          daily, weekly, monthly
+          
+        Examples:
+          aggregate weekly         -> Sums metrics for the whole project on a weekly basis
+          aggregate weekly author  -> Sums metrics weekly, broken down by each author
+        """
+        if self.dataFile is None:
+            print("Error: No data loaded. Please 'import <filepath>' first.")
+            return
+
+        args = arg.strip().split()
+        if not args:
+            print("Error: Please specify a frequency (daily, weekly, monthly).")
+            return
+
+        freq_input = args[0].lower()
+        freq_map = {
+            'daily': 'D',   'd': 'D',
+            'weekly': 'W',  'w': 'W',
+            'monthly': 'ME', 'm': 'ME' 
+        }
+        
+        if freq_input not in freq_map:
+            print(f"Error: Unknown frequency '{freq_input}'. Use 'daily', 'weekly', or 'monthly'.")
+            return
+        freq = freq_map[freq_input]
+
+        time_col = None
+        for col in self.dataFile.columns:
+            if self.custom_roles.get(col) == 'time' or pd.api.types.is_datetime64_any_dtype(self.dataFile[col]):
+                time_col = col
+                break
+
+        if not time_col:
+            print("Error: No datetime column detected. Run 'timecol <column>' first.")
+            return
+
+        if not pd.api.types.is_datetime64_any_dtype(self.dataFile[time_col]):
+            print(f"Notice: Column '{time_col}' needs to be parsed first. Auto-converting...")
+            try:
+                self.dataFile[time_col] = pd.to_datetime(self.dataFile[time_col])
+            except Exception as e:
+                print(f"Error: Could not convert '{time_col}' to datetime: {e}")
+                return
+
+        extra_groupby = None
+        if len(args) > 1:
+            extra_groupby = " ".join(args[1:])
+            if extra_groupby not in self.dataFile.columns:
+                print(f"Error: Column '{extra_groupby}' not found in dataset.")
+                return
+
+        try:
+            self._save_history()
+            
+            groupby_list = [pd.Grouper(key=time_col, freq=freq)]
+            if extra_groupby:
+                groupby_list.append(extra_groupby)
+                
+            print(f"Aggregating data ({freq_input}) by {time_col}" + (f" and {extra_groupby}" if extra_groupby else "") + "...")
+            
+            aggregated_df = self.dataFile.groupby(groupby_list).sum(numeric_only=True).reset_index()
+            
+            self.dataFile = aggregated_df
+            print(f"Success: Data aggregated. Current rows: {len(self.dataFile)}")
+            
+            self.do_show('head 10')
+            
+        except Exception as e:
+            if self.history:
+                self.history.pop()
+            print(f"Error during aggregation: {e}")
+
     def emptyline(self):
         """
         Overrides the default behavior of the cmd module
